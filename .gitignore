@@ -1,0 +1,22 @@
+# --- Secrets / Keys (nie ins Repo) ---
+Deepseek Key.txt
+LLM Key.txt
+tvremix API.txt
+Finhub Key.txt
+*.key
+*.secret
+
+# --- Logs/Artefakte/State ---
+data/reports/
+data/snapshots/
+*.log
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Editor/OS ---
+.DS_Store
+*.swp

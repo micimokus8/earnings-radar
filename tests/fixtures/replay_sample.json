@@ -1,0 +1,61 @@
+{
+  "report_type": "BEFORE_OPEN",
+  "report_date": "2026-08-13",
+  "as_of": "2026-08-13T09:30:00+00:00",
+  "symbols": ["NASDAQ:AAPL"],
+  "calendar": {
+    "status": "PASS",
+    "events": [
+      {
+        "symbol": "NASDAQ:AAPL",
+        "next_earnings_date": "2026-09-30",
+        "timing": "time-pre-market",
+        "eps_estimate": 1.0,
+        "revenue_estimate": 90000000000
+      }
+    ]
+  },
+  "quotes": {
+    "status": "PASS",
+    "quotes": {
+      "NASDAQ:AAPL": {"price": 303.565, "market_cap": 4500000000000}
+    }
+  },
+  "forecasts": {
+    "NASDAQ:AAPL": {
+      "status": "PASS",
+      "forecast": {
+        "eps_estimate": 1.0,
+        "target_upside_pct": 31.0,
+        "target_recently_cut": false
+      }
+    }
+  },
+  "technicals": {
+    "NASDAQ:AAPL": {
+      "status": "PASS",
+      "values": {
+        "price_1d": 303.565,
+        "price_4h": 303.565,
+        "ema20_1d": 313.3993828452557,
+        "ema20_4h": 310.398587116552,
+        "ema50_1d": 309.1409048049507,
+        "rsi_1d": 41.48215461947681,
+        "adx_1d": 22.56710791289286
+      }
+    }
+  },
+  "news": {
+    "NASDAQ:AAPL": {"status": "PASS", "negative_news": false}
+  },
+  "short_interest": {
+    "NASDAQ:AAPL": {
+      "status": "PASS",
+      "report_date": "2026-07-31",
+      "short_pct_outstanding": 0.9641,
+      "days_to_cover": 2.424722
+    }
+  },
+  "insider_status": {"NASDAQ:AAPL": "UNKNOWN"},
+  "dilution_status": {"NASDAQ:AAPL": "UNKNOWN"}
+}

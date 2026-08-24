@@ -1,0 +1,34 @@
+"""Compose one deterministic report from a pipeline run."""
+
+from __future__ import annotations
+
+from earnings_monitor.report_builder import build_report
+
+
+def run_report(
+    pipeline,
+    *,
+    symbols,
+    report_type: str,
+    report_date: str,
+    as_of: str,
+    date_from=None,
+    date_to=None,
+) -> dict:
+    result = pipeline.run(
+        symbols,
+        as_of=as_of,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return build_report(
+        report_type=report_type,
+        report_date=report_date,
+        as_of=as_of,
+        candidates=result.get("candidates", []),
+    )
+
+
+__all__ = ["run_report"]
+
+      
