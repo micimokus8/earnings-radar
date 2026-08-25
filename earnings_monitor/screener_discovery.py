@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from earnings_monitor.dedup import dedupe_dual_class_symbols
+
 
 def parse_screener_rows(rows, *, target_date: str) -> list[str]:
     """Return deduplicated symbols with earnings exactly on target_date.
@@ -9,7 +11,8 @@ def parse_screener_rows(rows, *, target_date: str) -> list[str]:
     Rows are expected from run_screener sorted ascending by
     earnings_release_next_date; we keep deduplicated server order so a
     symbol cap is NOT biased toward market cap. Size filtering (if any) is
-    applied separately in the client via min_market_cap.
+    applied separately in the client via min_market_cap. Dual-class share
+    tickers (e.g. HEI / HEI.A) are collapsed to a single symbol per company.
     """
     seen = set()
     ordered = []
@@ -23,7 +26,7 @@ def parse_screener_rows(rows, *, target_date: str) -> list[str]:
             continue
         seen.add(symbol)
         ordered.append(symbol)
-    return ordered
+    return dedupe_dual_class_symbols(ordered)
 
 
 __all__ = ["parse_screener_rows"]

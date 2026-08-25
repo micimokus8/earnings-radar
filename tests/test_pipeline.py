@@ -37,7 +37,7 @@ class _Technicals:
 
 
 class _News:
-    def get(self, symbol):
+    def get(self, symbol, *, as_of=None):
         return {"status": "PASS", "negative_news": False}
 
 
@@ -64,7 +64,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_source_exception_becomes_unknown_candidate_source(self):
         class BrokenNews:
-            def get(self, symbol):
+            def get(self, symbol, *, as_of=None):
                 raise RuntimeError("network")
 
         pipeline = EarningsPipeline(

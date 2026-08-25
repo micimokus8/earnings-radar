@@ -40,6 +40,16 @@ class ShortInterestProviderTests(unittest.TestCase):
         self.assertIsNone(result["short_pct_outstanding"])
         self.assertEqual(result["days_to_cover"], 2.42)
 
+    def test_non_nasdaq_symbol_is_exchange_na_not_error(self):
+        provider = ShortInterestProvider(
+            nasdaq=_FakeNasdaq(), outstanding=_FakeOutstanding(14_800.0)
+        )
+        result = provider.get("NYSE:HEI", as_of="2026-08-13T16:00:00+00:00")
+        self.assertEqual(result["status"], "N/A")
+        self.assertTrue(result["exchange_unsupported"])
+        self.assertIsNone(result["short_pct_outstanding"])
+        self.assertIsNone(result["days_to_cover"])
+
 
 if __name__ == "__main__":
     unittest.main()

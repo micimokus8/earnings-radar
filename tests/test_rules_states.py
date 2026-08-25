@@ -60,6 +60,22 @@ class RuleStateTests(unittest.TestCase):
         self.assertEqual(result["state"], "COMPLETE")
         self.assertTrue(result["final_recommendation_allowed"])
 
+    def test_unsupported_short_interest_does_not_block_completeness(self):
+        # NYSE symbols have no Nasdaq short-interest source; their missing SI
+        # fields must not disqualify the candidate as INCOMPLETE.
+        result = evaluate_core_completeness({
+            "price": 100,
+            "eps_estimate": 1.2,
+            "ohlcv_1d": "present",
+            "market_cap": 1_000_000,
+            "short_pct_outstanding": None,
+            "days_to_cover": None,
+            "short_interest_supported": False,
+        })
+        self.assertEqual(result["state"], "COMPLETE")
+        self.assertTrue(result["final_recommendation_allowed"])
+        self.assertNotIn("short_pct_outstanding", result["missing"])
+
 
 if __name__ == "__main__":
     unittest.main()

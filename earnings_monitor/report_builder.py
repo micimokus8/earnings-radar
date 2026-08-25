@@ -11,6 +11,7 @@ def build_report(
     report_date: str,
     as_of: str,
     candidates: list[dict],
+    removed_duplicate_symbols: list[str] | None = None,
 ) -> dict:
     if report_type not in {"BEFORE_OPEN", "AFTER_CLOSE"}:
         raise ValueError("unsupported report type")
@@ -41,6 +42,7 @@ def build_report(
             "candidate_count": len(ordered),
             "incomplete_count": incomplete_count,
             "missing_fields": dict(sorted(missing_fields.items())),
+            "removed_duplicate_symbols": list(removed_duplicate_symbols or []),
         },
     }
 

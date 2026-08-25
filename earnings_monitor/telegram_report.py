@@ -54,10 +54,12 @@ def _candidate_rows(candidate: dict) -> list[str]:
 
     sp = v.get("short_pct_outstanding")
     dtc = v.get("days_to_cover")
-    if sp is not None and dtc is not None:
+    if v.get("short_interest_supported") is False:
+        short_txt = "n/a (nur NASDAQ-SI)"
+    elif sp is not None and dtc is not None:
         short_txt = f"Short {_num(sp, '%')}·DTC {_num(dtc, digits=1)}"
     else:
-        short_txt = "n/a (kein Nasdaq-SI)"
+        short_txt = "n/a (SI-Fehler)"
 
     rsi = v.get("rsi_1d")
     e20, e50 = v.get("ema20_1d"), v.get("ema50_1d")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from earnings_monitor.candidate import build_candidate
+from earnings_monitor.dedup import dedupe_dual_class_symbols
 
 
 class EarningsPipeline:
@@ -70,7 +71,9 @@ class EarningsPipeline:
         return last_value if last_value is not None else self._unknown("exhausted")
 
     def run(self, symbols, *, as_of: str, date_from=None, date_to=None) -> dict:
-        requested = list(dict.fromkeys(symbols))
+        requested_raw = list(dict.fromkeys(symbols))
+        requested = dedupe_dual_class_symbols(requested_raw)
+        removed_duplicate_symbols = [s for s in requested_raw if s not in set(requested)]
         calendar = self._call(
             self.calendar,
             symbols=requested,
@@ -90,7 +93,7 @@ class EarningsPipeline:
             price = (quotes.get("quotes", {}).get(symbol, {}) or {}).get("price")
             forecast = self._call(self.forecasts, symbol, price=price)
             technicals = self._call(self.technicals, symbol)
-            news = self._call(self.news, symbol)
+            news = self._call(self.news, symbol, as_of=as_of)
             short_interest = self._call(self.short_interest, symbol, as_of=as_of)
             insider = self._call(self.insider, symbol, as_of) if self.insider else "UNKNOWN"
             dilution = self._call(self.dilution, symbol, as_of) if self.dilution else "UNKNOWN"
@@ -112,6 +115,7 @@ class EarningsPipeline:
             "status": "PASS",
             "as_of": as_of,
             "requested_symbols": requested,
+            "removed_duplicate_symbols": removed_duplicate_symbols,
             "calendar": calendar,
             "quotes": quotes,
             "candidates": candidates,

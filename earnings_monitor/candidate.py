@@ -48,6 +48,7 @@ def build_candidate(
         "target_recently_cut": forecast_row.get("target_recently_cut"),
         "short_pct_outstanding": short_interest.get("short_pct_outstanding"),
         "days_to_cover": short_interest.get("days_to_cover"),
+        "short_interest_supported": not short_interest.get("exchange_unsupported", False),
         "ohlcv_1d": technical_values.get("price_1d"),
         "news_status": _status(news),
         "negative_news": news.get("negative_news"),

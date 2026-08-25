@@ -33,19 +33,26 @@ def score_candidate(values: dict) -> dict:
         analyst_points += 1
     categories["analyst_expectation"] = _category(analyst_points, 3, unknown)
 
-    unknown = []
-    short_points = 0
-    short_pct = values.get("short_pct_outstanding")
-    days = values.get("days_to_cover")
-    if short_pct is None:
-        unknown.append("short_pct_outstanding")
+    if values.get("short_interest_supported") is False:
+        # Exchange not covered by the Nasdaq SI source (e.g. NYSE). Neutrally
+        # excluded: no points, no unknown penalty, state signals "not applicable".
+        categories["short_interest"] = {
+            "points": 0, "max_points": 3, "state": "N/A", "unknown": [],
+        }
     else:
-        short_points += int(short_pct > 10) + int(short_pct > 15)
-    if days is None:
-        unknown.append("days_to_cover")
-    else:
-        short_points += int(days > 3)
-    categories["short_interest"] = _category(short_points, 3, unknown)
+        unknown = []
+        short_points = 0
+        short_pct = values.get("short_pct_outstanding")
+        days = values.get("days_to_cover")
+        if short_pct is None:
+            unknown.append("short_pct_outstanding")
+        else:
+            short_points += int(short_pct > 10) + int(short_pct > 15)
+        if days is None:
+            unknown.append("days_to_cover")
+        else:
+            short_points += int(days > 3)
+        categories["short_interest"] = _category(short_points, 3, unknown)
 
     unknown = []
     chart_points = 0

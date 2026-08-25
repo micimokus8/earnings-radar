@@ -41,6 +41,19 @@ class ParseScreenerRowsTests(unittest.TestCase):
         result = parse_screener_rows(_rows()[3:4], target_date="2026-08-25")
         self.assertEqual(result, [])
 
+    def test_dual_class_shares_collapse_to_one(self):
+        rows = [
+            {"symbol": "NYSE:HEI", "name": "HEICO",
+             "earnings_release_next_date": "2026-08-25", "market_cap_basic": 41_000_000_000},
+            {"symbol": "NYSE:HEI.A", "name": "HEICO Class A",
+             "earnings_release_next_date": "2026-08-25", "market_cap_basic": 41_000_000_000},
+            {"symbol": "NASDAQ:SMTC", "name": "Semtech",
+             "earnings_release_next_date": "2026-08-25", "market_cap_basic": 3_000_000_000},
+        ]
+        result = parse_screener_rows(rows, target_date="2026-08-25")
+        self.assertEqual(result, ["NYSE:HEI", "NASDAQ:SMTC"])
+        self.assertNotIn("NYSE:HEI.A", result)
+
 
 if __name__ == "__main__":
     unittest.main()

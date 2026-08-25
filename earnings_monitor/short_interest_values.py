@@ -8,12 +8,18 @@ def build_short_interest_values(si: dict, *, shares_outstanding_millions) -> dic
 
     The percentage denominator is documented as *shares outstanding*
     (not free float); days_to_cover is the primary short signal.
+
+    A ``status`` of ``"N/A"`` means the exchange is not covered by the Nasdaq
+    short-interest source (e.g. NYSE). It is intentionally *not* a data error:
+    the candidate must not be disqualified as INCOMPLETE for it.
     """
     status = si.get("status", "UNKNOWN")
+    exchange_unsupported = bool(si.get("exchange_unsupported", False))
     report_date = si.get("report_date")
     base = {
         "status": status,
         "report_date": report_date,
+        "exchange_unsupported": exchange_unsupported,
         "short_pct_outstanding": None,
         "days_to_cover": si.get("days_to_cover"),
     }
@@ -40,5 +46,3 @@ def build_short_interest_values(si: dict, *, shares_outstanding_millions) -> dic
 
 
 __all__ = ["build_short_interest_values"]
-
-      

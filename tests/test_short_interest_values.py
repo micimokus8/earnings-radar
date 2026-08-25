@@ -47,6 +47,16 @@ class BuildShortInterestValuesTests(unittest.TestCase):
         self.assertEqual(result["status"], "PARTIAL")
         self.assertIsNone(result["short_pct_outstanding"])
 
+    def test_exchange_na_carries_unsupported_flag(self):
+        result = build_short_interest_values(
+            {"status": "N/A", "exchange_unsupported": True, "report_date": None,
+             "shares_short": None, "days_to_cover": None},
+            shares_outstanding_millions=14_800.0,
+        )
+        self.assertEqual(result["status"], "N/A")
+        self.assertTrue(result["exchange_unsupported"])
+        self.assertIsNone(result["short_pct_outstanding"])
+
 
 if __name__ == "__main__":
     unittest.main()

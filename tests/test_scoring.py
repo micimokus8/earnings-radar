@@ -79,6 +79,22 @@ class ScoringTests(unittest.TestCase):
         self.assertIsNone(result["label"])
         self.assertFalse(result["final_recommendation_allowed"])
 
+    def test_unsupported_short_interest_is_neutral_na(self):
+        # Exchange not covered (e.g. NYSE): short-interest is neutrally excluded,
+        # not penalized, and must not inject unknown fields.
+        values = {**COMPLETE_BASE,
+                  "short_pct_outstanding": None,
+                  "days_to_cover": None,
+                  "short_interest_supported": False}
+        result = score_candidate(values)
+        category = result["categories"]["short_interest"]
+        self.assertEqual(category["state"], "N/A")
+        self.assertEqual(category["points"], 0)
+        self.assertEqual(category["unknown"], [])
+        # Remaining categories still score normally -> candidate is complete.
+        self.assertEqual(result["state"], "COMPLETE")
+        self.assertIsNotNone(result["label"])
+
 
 if __name__ == "__main__":
     unittest.main()

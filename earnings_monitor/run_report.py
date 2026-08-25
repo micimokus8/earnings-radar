@@ -26,9 +26,8 @@ def run_report(
         report_date=report_date,
         as_of=as_of,
         candidates=result.get("candidates", []),
+        removed_duplicate_symbols=result.get("removed_duplicate_symbols", []),
     )
 
 
 __all__ = ["run_report"]
-
-      
