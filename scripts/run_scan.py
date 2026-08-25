@@ -52,8 +52,8 @@ def main() -> int:
                         help="File with ON/OFF to toggle LLM without code edits")
     parser.add_argument("--max-chars", type=int, default=4096,
                         help="Hard cap on rendered message length")
-    parser.add_argument("--max-symbols", type=int, default=12,
-                        help="Discovery/enrichment cap (provider rate-limit safe)")
+    parser.add_argument("--max-symbols", type=int, default=24,
+                        help="Enrichment cap, size-neutral order (rate-limit safe)")
     parser.add_argument("--throttle", type=float, default=0.25,
                         help="Seconds between per-source enrichment calls (rate-limit safety)")
     parser.add_argument("--min-market-cap", type=float, default=None,

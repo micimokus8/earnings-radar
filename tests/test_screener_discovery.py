@@ -27,11 +27,11 @@ def _rows():
 
 
 class ParseScreenerRowsTests(unittest.TestCase):
-    def test_filters_target_date_sorts_by_mcap_desc(self):
+    def test_filters_target_date_preserves_server_order(self):
         result = parse_screener_rows(_rows(), target_date="2026-08-25")
         self.assertEqual(
             result,
-            ["NYSE:BIGCAP", "NASDAQ:ZM", "NASDAQ:DUP", "NASDAQ:SMTC"],
+            ["NYSE:BIGCAP", "NASDAQ:ZM", "NASDAQ:SMTC", "NASDAQ:DUP"],
         )
 
     def test_empty_rows(self):
