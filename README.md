@@ -234,7 +234,7 @@ Deutung: <LLM, 2-3 Sätze>
 - Zustellung: Telegram-Chat `8686978363` (wie Kerdos); Modus `no_agent=true`, stdout 1:1 gesendet
 - **Kein Wochenende** (`1-5`); keine Earnings am Tag → kurze Meldung „Keine Earnings-Daten gefunden …"
 - **Cron-Timeout auf 600 s** erhöht (`cron.script_timeout_seconds` in `config.yaml`) — ausreichend für bis zu 40 Symbole
-- Symbolumfang: bis zu 40 Symbole (kein harter 5er-Cap), Universe ≥ $2 Mrd., ohne OTC
+- Symbolumfang: bis zu 24 Symbole, **größenneutral** (Server-Reihenfolge, kein Market-Cap-Bias — Small/Mid-Caps bleiben im Rennen), Universe ≥ $2 Mrd., ohne OTC
 - LLM-Job liest den deterministischen Report aus `data/reports/`; kein Key/kein Kandidat → kurze Hinweis-Meldung
 - Modell tauschbar in `LLM Model.txt`, LLM ein/aus via `LLM Enabled.txt`
 
