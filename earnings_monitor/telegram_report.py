@@ -106,11 +106,11 @@ def render_report(
         total, maxp = sc.get("total_points", 0), sc.get("max_points", 14)
         lines.append(_candidate_header(candidate, total, maxp))
         lines.extend(_candidate_rows(candidate))
-        if candidate.get("status") != "PASS":
+        d = deutung.get(candidate.get("symbol"))
+        if d:
+            lines.append(f"Deutung: {d}")
+        elif candidate.get("status") != "PASS":
             lines.append("Deutung: — (Daten unvollständig)")
-        else:
-            d = deutung.get(candidate.get("symbol"))
-            lines.append(f"Deutung: {d}" if d else "Deutung: —")
         lines.append("")
 
     lines.append("📊 RANKING")
@@ -124,10 +124,11 @@ def render_report(
         label = (c.get("score") or {}).get("label") or "unvollständig"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
         lines.append(f"• {medal} {ticker} — {sc}/14 — {label}")
-    lines.append("")
 
-    lines.append("🎯 Meine Empfehlung")
-    lines.append(empfehlung if empfehlung else "— (keine LLM-Empfehlung)")
+    if empfehlung:
+        lines.append("")
+        lines.append("🎯 Meine Empfehlung")
+        lines.append(empfehlung)
 
     text = "\n".join(lines).rstrip()
     if len(text) <= max_chars:

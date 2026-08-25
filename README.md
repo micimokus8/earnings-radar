@@ -222,16 +222,21 @@ Deutung: <LLM, 2-3 Sätze>
 
 ### Cron-Betrieb (aktiv seit 24.08.2026)
 
-| Job | ID | Zeit (tägl.) | Skript |
-|---|---|---|---|
-| BEFORE_OPEN | `cbeac85bce3d` | 09:30 UTC (11:30 DE) | `~/.hermes/scripts/cron_before_open.sh` |
-| AFTER_CLOSE | `ec04cd95bd18` | 16:30 UTC (18:30 DE) | `~/.hermes/scripts/cron_after_close.sh` |
+**Zwei Nachrichten pro Scan** (LLM ausgelagert, damit der deterministische Scan nie durch den LLM-Call blockiert wird):
 
-- Zustellung: Telegram-Chat `8686978363` (wie Kerdos)
-- Modus: `no_agent=true`, stdout wird 1:1 gesendet
-- Keine Earnings am Tag → kurze Meldung „Keine Earnings-Daten gefunden … Nichts zu ermitteln." (kein Crash)
-- LLM-Sektion via OpenRouter; Modell tauschbar in `LLM Model.txt`
-- Bekannte Grenze: NYSE/OTC-Symbole haben keine Nasdaq-Short-Interest-Daten → diese Kandidaten bleiben ehrlich `INCOMPLETE`
+| Job | ID | Zeit (Mo–Fr) | Inhalt |
+|---|---|---|---|
+| BEFORE_OPEN Scan | `cbeac85bce3d` | 09:30 UTC / 11:30 DE | deterministischer Report (Tabelle + Ranking) |
+| BEFORE_OPEN LLM | `66f847314339` | 09:45 UTC / 11:45 DE | Deutung + „Meine Empfehlung" |
+| AFTER_CLOSE Scan | `ec04cd95bd18` | 16:30 UTC / 18:30 DE | deterministischer Report |
+| AFTER_CLOSE LLM | `42e71808997c` | 16:45 UTC / 18:45 DE | Deutung + „Meine Empfehlung" |
+
+- Zustellung: Telegram-Chat `8686978363` (wie Kerdos); Modus `no_agent=true`, stdout 1:1 gesendet
+- **Kein Wochenende** (`1-5`); keine Earnings am Tag → kurze Meldung „Keine Earnings-Daten gefunden …"
+- **Cron-Timeout auf 600 s** erhöht (`cron.script_timeout_seconds` in `config.yaml`) — ausreichend für bis zu 40 Symbole
+- Symbolumfang: bis zu 40 Symbole (kein harter 5er-Cap), Universe ≥ $2 Mrd., ohne OTC
+- LLM-Job liest den deterministischen Report aus `data/reports/`; kein Key/kein Kandidat → kurze Hinweis-Meldung
+- Modell tauschbar in `LLM Model.txt`, LLM ein/aus via `LLM Enabled.txt`
 
 ### Yahoo Short Interest (historische Probe, weiter offen)
 

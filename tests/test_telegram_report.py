@@ -54,10 +54,11 @@ class TelegramReportTests(unittest.TestCase):
         self.assertIn("Meine Empfehlung", text)
         self.assertIn("AAPL ist der", text)
 
-    def test_incomplete_candidate_marks_no_deutung(self):
+    def test_without_llm_no_deutung_or_empfehlung_blocks(self):
         text = render_report(_sample())
-        # no deutung passed -> deterministic fallback for PASS candidate
-        self.assertIn("Deutung: —", text)
+        # PASS candidate with no LLM text -> no empty blocks.
+        self.assertNotIn("Deutung:", text)
+        self.assertNotIn("Meine Empfehlung", text)
 
     def test_truncation_when_too_long(self):
         text = render_report(_sample(), max_chars=200)
