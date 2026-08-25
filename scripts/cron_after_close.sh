@@ -6,6 +6,6 @@ export PYTHONPATH=.
 exec python3 scripts/run_scan.py \
   --auto-discover \
   --report-type AFTER_CLOSE \
-  --max-symbols 40 \
+  --max-symbols 12 \
   --min-market-cap 2000000000 \
   --exclude-prefixes "OTC:"

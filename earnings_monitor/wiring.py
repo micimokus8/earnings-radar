@@ -113,6 +113,7 @@ def build_default_pipeline(
     url: str = DEFAULT_TVREMIX_URL,
     ohlcv_count: int = 300,
     timeout: float = 20.0,
+    throttle_seconds: float = 0.0,
 ) -> EarningsPipeline:
     session = build_tvremix_session(
         secret_path=tvremix_secret_path, url=url, timeout=timeout
@@ -143,6 +144,7 @@ def build_default_pipeline(
         short_interest=short_interest,
         insider=insider,
         dilution=dilution,
+        throttle_seconds=throttle_seconds,
     )
 
 

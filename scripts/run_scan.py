@@ -52,7 +52,10 @@ def main() -> int:
                         help="File with ON/OFF to toggle LLM without code edits")
     parser.add_argument("--max-chars", type=int, default=4096,
                         help="Hard cap on rendered message length")
-    parser.add_argument("--max-symbols", type=int, default=15)
+    parser.add_argument("--max-symbols", type=int, default=12,
+                        help="Discovery/enrichment cap (provider rate-limit safe)")
+    parser.add_argument("--throttle", type=float, default=0.25,
+                        help="Seconds between per-source enrichment calls (rate-limit safety)")
     parser.add_argument("--min-market-cap", type=float, default=None,
                         help="Discovery universe: min market cap (USD)")
     parser.add_argument("--exclude-prefixes", default="",
@@ -67,6 +70,7 @@ def main() -> int:
         tvremix_secret_path=args.tvremix_secret,
         finnhub_key_path=args.finnhub_key,
         sec_user_agent_path=args.sec_user_agent,
+        throttle_seconds=args.throttle,
     )
 
     if args.auto_discover:

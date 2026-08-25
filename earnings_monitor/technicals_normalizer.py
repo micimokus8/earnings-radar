@@ -14,7 +14,7 @@ _FIELDS = (
 def normalize_technicals_for_score(result: dict) -> dict:
     values = {field: None for field in _FIELDS}
     unknown = []
-    if not isinstance(result, dict) or result.get("status") != "PASS":
+    if not isinstance(result, dict) or result.get("status") == "UNKNOWN":
         unknown.append("client_status")
         return {"status": "UNKNOWN", "values": values, "unknown": unknown}
 

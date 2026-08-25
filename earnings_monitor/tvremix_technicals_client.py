@@ -51,7 +51,7 @@ class TvremixTechnicalsClient:
 
         if errors:
             return {
-                "status": "UNKNOWN",
+                "status": "PARTIAL",
                 "technicals": technicals,
                 "ohlcv": ohlcv,
                 "errors": errors,

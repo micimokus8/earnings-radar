@@ -24,6 +24,7 @@ class EarningsPipeline:
         retries: int = 2,
         backoff_seconds: float = 0.75,
         sleep=time.sleep,
+        throttle_seconds: float = 0.0,
     ):
         self.calendar = calendar
         self.quotes = quotes
@@ -36,6 +37,7 @@ class EarningsPipeline:
         self.retries = max(0, int(retries))
         self.backoff_seconds = max(0.0, float(backoff_seconds))
         self._sleep = sleep
+        self.throttle_seconds = max(0.0, float(throttle_seconds))
 
     @staticmethod
     def _unknown(error: Exception | str) -> dict:
@@ -43,6 +45,8 @@ class EarningsPipeline:
 
     def _call(self, client, *args, **kwargs):
         last_value = None
+        if self.throttle_seconds:
+            self._sleep(self.throttle_seconds)
         for attempt in range(self.retries + 1):
             try:
                 value = (

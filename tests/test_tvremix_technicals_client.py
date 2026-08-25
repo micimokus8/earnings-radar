@@ -39,13 +39,14 @@ class TvremixTechnicalsClientTests(unittest.TestCase):
             ("get_ohlcv", {"symbol": "NASDAQ:AAPL", "interval": "4h", "count": 300, "summary": False}),
         ])
 
-    def test_failed_call_is_unknown(self):
+    def test_failed_calls_yield_partial(self):
         class Session:
             def call_tool(self, name, arguments):
                 return {"status": "UNKNOWN", "response": None, "error": "request_failed"}
 
         result = TvremixTechnicalsClient(Session()).get("NASDAQ:AAPL")
-        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(len(result.get("errors", [])), 4)
 
 
 if __name__ == "__main__":
