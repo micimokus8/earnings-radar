@@ -65,6 +65,9 @@ def main() -> int:
                         help="Symbols per parallel scan chunk (rate-limit safe)")
     parser.add_argument("--per-chunk-deadline", type=float, default=560.0,
                         help="Wall-clock budget per chunk (cron-safe margin)")
+    parser.add_argument("--overall-budget", type=float, default=560.0,
+                        help="Hard total budget for the whole sharded run; chunks past this are killed "
+                             "(keeps the cron job safely under the 600s scheduler cap)")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
     parser.add_argument("--finnhub-key", default="Finhub Key.txt")
     parser.add_argument("--out-dir", default="data/reports")
@@ -95,8 +98,24 @@ def main() -> int:
             "--finnhub-key", args.finnhub_key,
         ], capture=False))
 
+    # Wait for all chunks, but with an absolute overall budget so the whole
+    # cron job can never be killed by the 600s scheduler cap: past the budget
+    # we terminate any still-running chunk and merge whatever finished.
+    import time as _time
+    start = _time.monotonic()
     for proc in procs:
-        proc.wait()
+        remaining = args.overall_budget - (_time.monotonic() - start)
+        if remaining <= 0:
+            proc.kill()
+        else:
+            try:
+                proc.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    for proc in procs:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
     reports = []
     for shard_path in shard_paths:

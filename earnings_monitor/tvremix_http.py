@@ -9,8 +9,8 @@ import urllib.request
 
 
 def request_json(url, headers, timeout, payload, *, opener=urllib.request.urlopen,
-                 retries: int = 4, backoff_seconds: float = 1.0,
-                 max_backoff: float = 12.0,
+                 retries: int = 2, backoff_seconds: float = 0.5,
+                 max_backoff: float = 8.0,
                  sleep=time.sleep):
     """POST JSON with calm, 429-aware retry/backoff for the TVRemix MCP.
 
