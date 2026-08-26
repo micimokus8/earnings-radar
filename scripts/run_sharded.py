@@ -68,9 +68,10 @@ def main() -> int:
     parser.add_argument("--max-symbols", type=int, default=24)
     parser.add_argument("--chunk-size", type=int, default=6,
                         help="Symbols per parallel scan chunk (rate-limit safe)")
-    parser.add_argument("--per-chunk-deadline", type=float, default=560.0,
-                        help="Wall-clock budget per chunk (cron-safe margin)")
-    parser.add_argument("--overall-budget", type=float, default=560.0,
+    parser.add_argument("--per-chunk-deadline", type=float, default=380.0,
+                        help="Wall-clock budget per chunk; MUST stay under overall-budget so a slow "
+                             "chunk writes its partial shard JSON instead of being killed first")
+    parser.add_argument("--overall-budget", type=float, default=580.0,
                         help="Hard total budget for the whole sharded run; chunks past this are killed "
                              "(keeps the cron job safely under the 600s scheduler cap)")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
@@ -88,6 +89,9 @@ def main() -> int:
     if not symbols:
         print(f"📅 {args.report_type.replace('_', ' ')} — keine Symbole gefunden.")
         return 0
+
+    # --chunks began, timing restarts here: budget is measured from NOW onward
+    chunk_t0 = time.monotonic()
 
     # Dedupe once on the full list so dual-class pairs (HEI/HEI.A) are never
     # split across chunks, which would otherwise survive into the merged report.
@@ -114,7 +118,7 @@ def main() -> int:
     # scheduler cap; past the budget we kill any still-running chunk and merge
     # whatever finished.
     for proc in procs:
-        remaining = budget - (time.monotonic() - t_start)
+        remaining = budget - (time.monotonic() - chunk_t0)
         if remaining <= 0:
             proc.kill()
         else:
@@ -142,6 +146,22 @@ def main() -> int:
         return 1
 
     merged = merge_reports(reports, report_type=args.report_type)
+
+    # Detect silently-lost symbols: every discovered symbol (minus those
+    # intentionally deduped) must appear in the merged report. If not, flag it
+    # loudly instead of pretending the scan was complete.
+    reported = {
+        c["symbol"] for report in reports for c in report.get("candidates", [])
+    }
+    removed = set()
+    for report in reports:
+        removed |= set(report.get("quality", {}).get("removed_duplicate_symbols", []) or [])
+    expected = set(symbols) | removed
+    lost = sorted(expected - reported)
+    merged["quality"]["lost_symbols"] = lost
+    if lost:
+        merged["quality"]["truncated"] = True
+        sys.stderr.write(f"[verlust] {len(lost)} Symbol(e) fehlen im Report: {', '.join(lost)}\n")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

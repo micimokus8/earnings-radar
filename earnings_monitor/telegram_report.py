@@ -102,8 +102,13 @@ def render_report(
     rtype = report["report_type"]
     rdate = report["report_date"]
     truncated = bool((report.get("quality") or {}).get("truncated", False))
+    lost = (report.get("quality") or {}).get("lost_symbols") or []
     header_line = f"📊 {rtype.replace('_', ' ')} — Earnings {rdate}"
-    if truncated:
+    if lost:
+        header_line += " · ⚠️ Verlorene Symbole: " + ", ".join(
+            s.split(":")[-1] for s in lost[:6]
+        ) + (" …" if len(lost) > 6 else "") + " (Scan unvollständig)"
+    elif truncated:
         header_line += " · ⚠️ ggf. gekappt (Deadline)"
     lines = [header_line, ""]
 

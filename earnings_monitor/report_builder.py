@@ -13,6 +13,7 @@ def build_report(
     candidates: list[dict],
     removed_duplicate_symbols: list[str] | None = None,
     truncated: bool = False,
+    lost_symbols: list[str] | None = None,
 ) -> dict:
     if report_type not in {"BEFORE_OPEN", "AFTER_CLOSE"}:
         raise ValueError("unsupported report type")
@@ -44,6 +45,7 @@ def build_report(
             "incomplete_count": incomplete_count,
             "missing_fields": dict(sorted(missing_fields.items())),
             "removed_duplicate_symbols": list(removed_duplicate_symbols or []),
+            "lost_symbols": list(lost_symbols or []),
             "truncated": bool(truncated),
         },
     }
@@ -63,6 +65,7 @@ def merge_reports(
     seen = set()
     candidates: list[dict] = []
     removed: list[str] = []
+    lost: list[str] = []
     truncated = False
     for report in reports:
         for candidate in report.get("candidates", []):
@@ -73,6 +76,7 @@ def merge_reports(
             candidates.append(candidate)
         quality = report.get("quality", {})
         removed.extend(quality.get("removed_duplicate_symbols", []) or [])
+        lost.extend(quality.get("lost_symbols", []) or [])
         truncated = truncated or bool(quality.get("truncated", False))
 
     first = reports[0]
@@ -81,8 +85,9 @@ def merge_reports(
         report_date=report_date or first["report_date"],
         as_of=as_of or first["as_of"],
         candidates=candidates,
-        removed_duplicate_symbols=removed,
+        removed_duplicate_symbols=list(dict.fromkeys(removed)),
         truncated=truncated,
+        lost_symbols=list(dict.fromkeys(lost)),
     )
 
 

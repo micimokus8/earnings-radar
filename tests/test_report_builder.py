@@ -77,6 +77,20 @@ class ReportBuilderTests(unittest.TestCase):
         self.assertEqual(merged["quality"]["candidate_count"], 2)
         self.assertEqual(merged["quality"]["incomplete_count"], 1)
 
+    def test_merge_preserves_lost_symbols_flagged(self):
+        a = build_report(
+            report_type="AFTER_CLOSE", report_date="2026-08-26",
+            as_of="2026-08-26T16:30:00+00:00",
+            candidates=[{
+                "symbol": "NASDAQ:NVDA", "status": "PASS",
+                "score": {"total_points": 5, "label": "SKIP"}, "missing": [],
+            }],
+            lost_symbols=["NYSE:CRM", "NASDAQ:CRWD"],
+        )
+        merged = merge_reports([a])
+        self.assertIn("NYSE:CRM", merged["quality"]["lost_symbols"])
+        self.assertIn("NASDAQ:CRWD", merged["quality"]["lost_symbols"])
+
 
 if __name__ == "__main__":
     unittest.main()
