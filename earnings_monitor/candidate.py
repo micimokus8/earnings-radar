@@ -62,6 +62,9 @@ def build_candidate(
             "rsi_1d", "adx_1d",
         )
     })
+    # Persist top headline so telegram + LLM can display / judge sentiment.
+    headlines = news.get("headlines", []) if isinstance(news, dict) else []
+    top_headline = headlines[0].get("headline") if isinstance(headlines, list) and headlines and isinstance(headlines[0], dict) else None
 
     score = score_candidate(values)
     missing = list(score.get("missing", []))
@@ -88,6 +91,8 @@ def build_candidate(
             "dilution_status": dilution_status,
         },
         "score": score,
+        "top_headline": top_headline,
+        "top_headline_url": (headlines[0].get("link") if top_headline else None) if isinstance(headlines, list) and headlines and isinstance(headlines[0], dict) else None,
     }
 
 

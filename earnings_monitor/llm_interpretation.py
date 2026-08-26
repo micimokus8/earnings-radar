@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import urllib.request
-
 _SYSTEM_PROMPT = (
     "Du bist ein vorsichtiger US-Earnings-Analyst. Du bekommst Kandidaten aus "
     "einem deterministischen Scanner (0-14 Punkte, 4 Kategorien). Regeln: "
@@ -28,6 +27,7 @@ def _candidate_block(candidate: dict) -> str:
     score = candidate.get("score", {})
     calendar = candidate.get("sources", {}).get("calendar", {})
     cats = score.get("categories", {})
+    top_headline = candidate.get("top_headline")
     lines = [
         f"Symbol: {candidate.get('symbol')}",
         f"Label/Score: {score.get('label')} ({score.get('total_points', 0)}/14)",
@@ -45,6 +45,8 @@ def _candidate_block(candidate: dict) -> str:
         f"(news_status={values.get('news_status')}, negative_news={values.get('negative_news')}, "
         f"insider={values.get('insider_status')}, dilution={values.get('dilution_status')})",
     ]
+    if top_headline:
+        lines.append(f'Top-Headline: "{top_headline}"')
     return "\n".join(lines)
 
 
@@ -90,7 +92,7 @@ def interpret_candidates(
     payload = {
         "model": model,
         "temperature": 0.4,
-        "max_tokens": 1600,  # high enough that reasoning models still leave room for visible content
+        "max_tokens": 1600,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(candidates)},
@@ -106,7 +108,7 @@ def interpret_candidates(
             payload=payload,
         )
         raw = response["choices"][0]["message"]["content"].strip()
-    except Exception as exc:  # surface the failure instead of failing silently
+    except Exception as exc:
         error = repr(exc)
         raw = ""
     if not raw:
@@ -126,7 +128,7 @@ def interpret_candidates(
             rest = stripped[len(_DEUTUNG_MARKER):].strip()
             if " " in rest:
                 symbol, text = rest.split(" ", 1)
-                deutung[symbol.lstrip("*:-").strip()] = text.strip()
+                deutung[symbol.lstrip('*:-"').strip()] = text.strip()
             continue
         if stripped.startswith(_EMPFEHLUNG_MARKER):
             empfehlung = stripped[len(_EMPFEHLUNG_MARKER):].strip()

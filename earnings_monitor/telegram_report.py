@@ -81,13 +81,20 @@ def _candidate_rows(candidate: dict) -> list[str]:
         news_txt = "News n/a"
     if v.get("insider_status") in ("NO_DIRECT_SELL", "NO_RECENT_FILING_FOUND"):
         news_txt += "·kein Insider-Sell"
-
+    # Deterministic headline always shown; LLM judges later for nuance.
+    headline_line = None
+    for cand_key in (candidate.get("top_headline"),):
+        if cand_key:
+            short = cand_key.strip()
+            if len(short) > 120:
+                short = short[:117] + "…"
+            headline_line = f'    \u201c{short}\u201d'
     return [
         f"| ① Analysten | {analyst_txt} | +{a_pts} |",
         f"| ② Short     | {short_txt} | +{si_pts} |",
         f"| ③ Chart     | {chart_txt} | +{ch_pts} |",
         f"| ④ News/SEC  | {news_txt} | +{nw_pts} |",
-    ]
+    ] + ([headline_line] if headline_line else [])
 
 
 def render_report(

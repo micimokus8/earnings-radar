@@ -7,6 +7,7 @@ from pathlib import Path
 from earnings_monitor.pipeline import EarningsPipeline
 from earnings_monitor.technicals_normalizer import normalize_technicals_for_score
 from earnings_monitor.finnhub_outstanding_client import FinnhubOutstandingClient
+from earnings_monitor.finnhub_short_interest_fallback import FinnhubShortInterestFallback
 from earnings_monitor.nasdaq_short_interest_client import NasdaqShortInterestClient
 from earnings_monitor.sec_http import SecHttpClient
 from earnings_monitor.sec_orchestration import (
@@ -124,6 +125,9 @@ def build_default_pipeline(
     short_interest = ShortInterestProvider(
         nasdaq=NasdaqShortInterestClient(timeout=timeout),
         outstanding=FinnhubOutstandingClient(
+            key_path=finnhub_key_path, timeout=timeout
+        ),
+        finnhub_short=FinnhubShortInterestFallback(
             key_path=finnhub_key_path, timeout=timeout
         ),
     )

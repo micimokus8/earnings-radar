@@ -162,6 +162,72 @@ def main() -> int:
     if lost:
         merged["quality"]["truncated"] = True
         sys.stderr.write(f"[verlust] {len(lost)} Symbol(e) fehlen im Report: {', '.join(lost)}\n")
+        # Sequential rescue pass: each lost symbol gets its own small scan,
+        # bounded by (remaining outer budget / number of lost symbols). This
+        # guarantees zero lost symbols in the steady state: the expensive
+        # mega-cap chunk produced a shard that was killed, but the individual
+        # tickers inside it can be rescued cheaply.
+        remaining = budget - (time.monotonic() - chunk_t0)
+        if remaining >= 35 and lost:
+            per_rescue = max(35.0, min(args.per_chunk_deadline, remaining / len(lost)))
+            sys.stderr.write(f"[rescue] starte Einzel-Rettung: {len(lost)} Symbol(e), je {per_rescue:.0f}s\n")
+            for sym in lost[:]:
+                # budget check between symbols
+                remaining = budget - (time.monotonic() - chunk_t0)
+                if remaining < 30:
+                    sys.stderr.write("[rescue] Budget aufgebraucht, Abbruch Rettung\n")
+                    break
+                per_sym = min(per_rescue, remaining - 6)  # 6s reserve for merge/write
+                if per_sym < 28:
+                    per_sym = remaining - 6
+                if per_sym < 20:
+                    break
+                rescue_path = work / f"rescue_{sym.replace(':', '_')}.json"
+                shard_paths.append(rescue_path)
+                rp = _run(args, [
+                    "--symbols", sym,
+                    "--report-type", args.report_type,
+                    "--as-of", args.as_of or "",
+                    "--out-file", str(rescue_path),
+                    "--deadline-seconds", str(per_sym),
+                    "--tvremix-secret", args.tvremix_secret,
+                    "--finnhub-key", args.finnhub_key,
+                ], capture=False)
+                try:
+                    rp.wait(timeout=per_sym + 12)
+                except subprocess.TimeoutExpired:
+                    rp.kill()
+                    try:
+                        rp.wait(timeout=6)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if rescue_path.exists():
+                    try:
+                        reports.append(json.loads(rescue_path.read_text()))
+                    except Exception as exc:
+                        sys.stderr.write(f"[rescue] shard {rescue_path} ungueltig: {exc}\n")
+                        continue
+                    sys.stderr.write(f"[rescue] {sym} gerettet\n")
+                else:
+                    sys.stderr.write(f"[rescue] {sym} weiterhin fehlend\n")
+            # Re-merge including rescued shards.
+            if reports:
+                merged = merge_reports(reports, report_type=args.report_type)
+                reported2 = {c["symbol"] for r in reports for c in r.get("candidates", [])}
+                removed2 = set()
+                for r in reports:
+                    removed2 |= set(r.get("quality", {}).get("removed_duplicate_symbols", []) or [])
+                expected2 = set(symbols) | removed2
+                lost2 = sorted(expected2 - reported2)
+                merged["quality"]["lost_symbols"] = lost2
+                if lost2:
+                    merged["quality"]["truncated"] = True
+                    sys.stderr.write(f"[verlust-nach-rescue] noch fehlend: {', '.join(lost2)}\n")
+                else:
+                    # Keep truncated flag if any shard was truncated (partial rescued shard).
+                    merged["quality"]["truncated"] = any(
+                        bool(r.get("quality", {}).get("truncated")) for r in reports
+                    )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
