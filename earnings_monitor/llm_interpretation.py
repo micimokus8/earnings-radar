@@ -90,12 +90,14 @@ def interpret_candidates(
     payload = {
         "model": model,
         "temperature": 0.4,
-        "max_tokens": 900,
+        "max_tokens": 1600,  # high enough that reasoning models still leave room for visible content
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(candidates)},
         ],
     }
+    response = None
+    error = None
     try:
         response = requester(
             f"{base_url.rstrip('/')}/chat/completions",
@@ -104,8 +106,16 @@ def interpret_candidates(
             payload=payload,
         )
         raw = response["choices"][0]["message"]["content"].strip()
-    except Exception:
-        return {"deutung": {}, "empfehlung": ""}
+    except Exception as exc:  # surface the failure instead of failing silently
+        error = repr(exc)
+        raw = ""
+    if not raw:
+        finish = (response or {}).get("choices", [{}])[0].get("finish_reason")
+        return {
+            "deutung": {},
+            "empfehlung": "",
+            "error": error or f"leere Antwort (finish_reason={finish}; moegliche Ursache: Reasoning-Modell braucht mehr max_tokens)",
+        }
 
     deutung = {}
     empfehlung = ""

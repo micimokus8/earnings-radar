@@ -61,7 +61,7 @@ def main() -> int:
                         help="Key file (OpenRouter key)")
     parser.add_argument("--llm-model-file", default="LLM Model.txt",
                         help="File holding the model slug (swap without code changes)")
-    parser.add_argument("--llm-model", default="stealth/ox-alpha",
+    parser.add_argument("--llm-model", default="openai/gpt-4o-mini",
                         help="Fallback model if model file is missing/empty")
     parser.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     parser.add_argument("--llm-enabled-file", default="LLM Enabled.txt",

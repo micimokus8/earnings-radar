@@ -31,7 +31,8 @@ def main() -> int:
     parser.add_argument("--out-dir", default="data/reports")
     parser.add_argument("--llm-key", default="LLM Key.txt")
     parser.add_argument("--llm-model-file", default="LLM Model.txt")
-    parser.add_argument("--llm-model", default="stealth/ox-alpha")
+    parser.add_argument("--llm-model", default="openai/gpt-4o-mini",
+                            help="Fallback model if model file is missing/empty")
     parser.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     parser.add_argument("--llm-enabled-file", default="LLM Enabled.txt")
     args = parser.parse_args()
@@ -69,9 +70,11 @@ def main() -> int:
     deutung = result.get("deutung", {})
     empfehlung = result.get("empfehlung", "")
     if not deutung and not empfehlung:
+        err = result.get("error", "")
         print(f"🤖 LLM-Bewertung {args.report_type.replace('_', ' ')} "
-              f"{report_date}: Interpretation fehlgeschlagen.")
-        return 0
+              f"{report_date}: Interpretation fehlgeschlagen."
+              + (f" ({err})" if err else ""))
+        return 1
 
     lines = [
         f"🤖 LLM-Bewertung ({model}) — {args.report_type.replace('_', ' ')} {report_date}",

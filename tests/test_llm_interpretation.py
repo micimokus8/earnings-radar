@@ -62,13 +62,25 @@ class InterpretationTests(unittest.TestCase):
                          "Setup schwach, Ziel klein.")
         self.assertEqual(out["empfehlung"], "Heute eher nichts Kaufenswertes.")
 
-    def test_error_returns_empty(self):
+    def test_error_returns_empty_with_error_hint(self):
         fake = _FakeRequester(error=RuntimeError("boom"))
         out = interpret_candidates(
             _candidates(), api_key="k", base_url="https://x", model="m",
             requester=fake.post_json,
         )
-        self.assertEqual(out, {"deutung": {}, "empfehlung": ""})
+        self.assertEqual(out.get("deutung"), {})
+        self.assertEqual(out.get("empfehlung"), "")
+        self.assertIn("boom", out.get("error", ""))
+
+    def test_empty_response_returns_error_hint(self):
+        fake = _FakeRequester("")
+        out = interpret_candidates(
+            _candidates(), api_key="k", base_url="https://x", model="m",
+            requester=fake.post_json,
+        )
+        self.assertEqual(out.get("deutung"), {})
+        self.assertEqual(out.get("empfehlung"), "")
+        self.assertTrue(out.get("error"))
 
     def test_empty_candidates_returns_empty(self):
         out = interpret_candidates(

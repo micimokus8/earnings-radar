@@ -15,6 +15,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from earnings_monitor.dedup import dedupe_dual_class_symbols
@@ -24,23 +25,27 @@ from earnings_monitor.telegram_report import render_report
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
-def _run(args, extra, *, capture=True):
+def _run(args, extra, *, capture=True, timeout=None):
     cmd = [sys.executable, str(SCRIPT_DIR / "run_scan.py"), *extra]
     if capture:
-        return subprocess.run(cmd, capture_output=True, text=True)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def _discover_symbols(args) -> list[str]:
-    result = _run(args, [
-        "--discover-only",
-        "--report-type", args.report_type,
-        "--target-date", args.target_date or "",
-        "--min-market-cap", str(args.min_market_cap),
-        "--exclude-prefixes", args.exclude_prefixes,
-        "--max-symbols", str(args.max_symbols),
-        "--tvremix-secret", args.tvremix_secret,
-    ])
+def _discover_symbols(args, timeout) -> list[str]:
+    try:
+        result = _run(args, [
+            "--discover-only",
+            "--report-type", args.report_type,
+            "--target-date", args.target_date or "",
+            "--min-market-cap", str(args.min_market_cap),
+            "--exclude-prefixes", args.exclude_prefixes,
+            "--max-symbols", str(args.max_symbols),
+            "--tvremix-secret", args.tvremix_secret,
+        ], timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("[discover] Discovery ueberschritt Budget - Scan abgebrochen.\n")
+        return []
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         return []
@@ -73,7 +78,13 @@ def main() -> int:
     parser.add_argument("--out-dir", default="data/reports")
     args = parser.parse_args()
 
-    symbols = _discover_symbols(args)
+    # Discovery counts against the overall budget so a slow discovery alone
+    # can never stall the cron job past the scheduler cap.
+    budget = args.overall_budget
+    t_start = time.monotonic()
+    symbols = _discover_symbols(args, timeout=budget)
+    discover_elapsed = time.monotonic() - t_start
+    budget = max(0.0, budget - discover_elapsed)
     if not symbols:
         print(f"📅 {args.report_type.replace('_', ' ')} — keine Symbole gefunden.")
         return 0
@@ -98,13 +109,12 @@ def main() -> int:
             "--finnhub-key", args.finnhub_key,
         ], capture=False))
 
-    # Wait for all chunks, but with an absolute overall budget so the whole
-    # cron job can never be killed by the 600s scheduler cap: past the budget
-    # we terminate any still-running chunk and merge whatever finished.
-    import time as _time
-    start = _time.monotonic()
+    # Wait for all chunks, but with the absolute overall budget (discovery
+    # time already subtracted) so the whole cron job stays under the 600s
+    # scheduler cap; past the budget we kill any still-running chunk and merge
+    # whatever finished.
     for proc in procs:
-        remaining = args.overall_budget - (_time.monotonic() - start)
+        remaining = budget - (time.monotonic() - t_start)
         if remaining <= 0:
             proc.kill()
         else:
