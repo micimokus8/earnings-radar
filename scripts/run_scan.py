@@ -22,12 +22,27 @@ def _ny_today() -> str:
     return now_ny.strftime("%Y-%m-%d")
 
 
+def _discover(args) -> list[str]:
+    """Discover earnings symbols once (screener, NY date) and return the list."""
+    from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
+    target_date = args.target_date or _ny_today()
+    exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
+    discovery = ScreenerDiscoveryClient(
+        build_tvremix_session(secret_path=args.tvremix_secret),
+        exclude_prefixes=exclude,
+        min_market_cap=args.min_market_cap,
+    )
+    return discovery.get(target_date)[: max(args.max_symbols, 0)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Earnings monitor scan")
     parser.add_argument("--symbols", default=None,
                         help="Comma-separated TVRemix-style symbols")
     parser.add_argument("--auto-discover", action="store_true",
                         help="Discover earnings symbols via screener (NY date)")
+    parser.add_argument("--discover-only", action="store_true",
+                        help="Discover earnings symbols and print them (space-separated), then exit")
     parser.add_argument("--target-date", default=None,
                         help="Override discovery date YYYY-MM-DD (default: NY today)")
     parser.add_argument("--report-type", default="BEFORE_OPEN",
@@ -64,7 +79,18 @@ def main() -> int:
     parser.add_argument("--exclude-prefixes", default="",
                         help="Comma-separated symbol prefixes to drop (e.g. 'OTC:')")
     parser.add_argument("--out-dir", default="data/reports")
+    parser.add_argument("--out-file", default=None,
+                        help="Write report JSON to this exact path instead of auto-named (sharding)")
     args = parser.parse_args()
+
+    if args.discover_only:
+        symbols = _discover(args)
+        if not symbols:
+            print(f"📅 {args.report_type.replace('_', ' ')} — "
+                  f"{(args.target_date or _ny_today())}: keine Symbole gefunden.")
+        else:
+            print(" ".join(symbols))
+        return 0
 
     report_date = args.report_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     as_of = args.as_of or datetime.now(timezone.utc).isoformat()
@@ -81,18 +107,10 @@ def main() -> int:
     )
 
     if args.auto_discover:
-        from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
-        target_date = args.target_date or _ny_today()
-        exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
-        discovery = ScreenerDiscoveryClient(
-            build_tvremix_session(secret_path=args.tvremix_secret),
-            exclude_prefixes=exclude,
-            min_market_cap=args.min_market_cap,
-        )
-        symbols = discovery.get(target_date)[: max(args.max_symbols, 0)]
+        symbols = _discover(args)
         if not symbols:
             print(
-                f"📅 {args.report_type.replace('_', ' ')} — {target_date}: "
+                f"📅 {args.report_type.replace('_', ' ')} — {(args.target_date or _ny_today())}: "
                 "Keine Earnings-Daten gefunden (Filter/Heute ohne Reporter). "
                 "Nichts zu ermitteln."
             )
@@ -114,8 +132,12 @@ def main() -> int:
 
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    safe_id = report["report_id"].replace(":", "_")
-    out_path = out_dir / f"{safe_id}.json"
+    if args.out_file:
+        out_path = pathlib.Path(args.out_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        safe_id = report["report_id"].replace(":", "_")
+        out_path = out_dir / f"{safe_id}.json"
     with open(out_path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2, sort_keys=True)
         handle.write("\n")

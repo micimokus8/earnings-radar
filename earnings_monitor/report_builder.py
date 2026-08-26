@@ -49,7 +49,44 @@ def build_report(
     }
 
 
-__all__ = ["build_report"]
+def merge_reports(
+    reports: list[dict],
+    *,
+    report_type: str | None = None,
+    report_date: str | None = None,
+    as_of: str | None = None,
+) -> dict:
+    """Combine several shard reports into one (no symbols dropped)."""
+    if not reports:
+        raise ValueError("no reports to merge")
+
+    seen = set()
+    candidates: list[dict] = []
+    removed: list[str] = []
+    truncated = False
+    for report in reports:
+        for candidate in report.get("candidates", []):
+            symbol = candidate.get("symbol")
+            if symbol in seen:
+                continue
+            seen.add(symbol)
+            candidates.append(candidate)
+        quality = report.get("quality", {})
+        removed.extend(quality.get("removed_duplicate_symbols", []) or [])
+        truncated = truncated or bool(quality.get("truncated", False))
+
+    first = reports[0]
+    return build_report(
+        report_type=report_type or first["report_type"],
+        report_date=report_date or first["report_date"],
+        as_of=as_of or first["as_of"],
+        candidates=candidates,
+        removed_duplicate_symbols=removed,
+        truncated=truncated,
+    )
+
+
+__all__ = ["build_report", "merge_reports"]
 
       
   
