@@ -101,7 +101,11 @@ def render_report(
     empfehlung = (empfehlung or "").strip()
     rtype = report["report_type"]
     rdate = report["report_date"]
-    lines = [f"📊 {rtype.replace('_', ' ')} — Earnings {rdate}", ""]
+    truncated = bool((report.get("quality") or {}).get("truncated", False))
+    header_line = f"📊 {rtype.replace('_', ' ')} — Earnings {rdate}"
+    if truncated:
+        header_line += " · ⚠️ ggf. gekappt (Deadline)"
+    lines = [header_line, ""]
 
     for candidate in report["candidates"]:
         sc = candidate.get("score") or {}

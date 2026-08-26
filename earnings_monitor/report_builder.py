@@ -12,6 +12,7 @@ def build_report(
     as_of: str,
     candidates: list[dict],
     removed_duplicate_symbols: list[str] | None = None,
+    truncated: bool = False,
 ) -> dict:
     if report_type not in {"BEFORE_OPEN", "AFTER_CLOSE"}:
         raise ValueError("unsupported report type")
@@ -43,6 +44,7 @@ def build_report(
             "incomplete_count": incomplete_count,
             "missing_fields": dict(sorted(missing_fields.items())),
             "removed_duplicate_symbols": list(removed_duplicate_symbols or []),
+            "truncated": bool(truncated),
         },
     }
 

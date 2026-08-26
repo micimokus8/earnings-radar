@@ -39,6 +39,18 @@ class ReportBuilderTests(unittest.TestCase):
             "short_pct_outstanding": 1,
         })
 
+    def test_truncated_flag_propagates_to_quality(self):
+        candidates = [{
+            "symbol": "NASDAQ:AAPL", "status": "PASS",
+            "score": {"total_points": 10, "label": "STRONG_SETUP"}, "missing": [],
+        }]
+        report = build_report(
+            report_type="BEFORE_OPEN", report_date="2026-08-13",
+            as_of="2026-08-13T09:30:00+00:00",
+            candidates=candidates, truncated=True,
+        )
+        self.assertTrue(report["quality"]["truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()

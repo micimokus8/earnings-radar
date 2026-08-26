@@ -7,6 +7,7 @@ import argparse
 import json
 import pathlib
 import sys
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -56,6 +57,8 @@ def main() -> int:
                         help="Enrichment cap, size-neutral order (rate-limit safe)")
     parser.add_argument("--throttle", type=float, default=0.25,
                         help="Seconds between per-source enrichment calls (rate-limit safety)")
+    parser.add_argument("--deadline-seconds", type=float, default=540.0,
+                        help="Hard wall-clock budget; scan stops early past it (cron-safe)")
     parser.add_argument("--min-market-cap", type=float, default=None,
                         help="Discovery universe: min market cap (USD)")
     parser.add_argument("--exclude-prefixes", default="",
@@ -65,6 +68,10 @@ def main() -> int:
 
     report_date = args.report_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     as_of = args.as_of or datetime.now(timezone.utc).isoformat()
+    deadline = (
+        time.monotonic() + args.deadline_seconds
+        if args.deadline_seconds and args.deadline_seconds > 0 else None
+    )
 
     pipeline = build_default_pipeline(
         tvremix_secret_path=args.tvremix_secret,
@@ -102,6 +109,7 @@ def main() -> int:
         report_type=args.report_type,
         report_date=report_date,
         as_of=as_of,
+        deadline=deadline,
     )
 
     out_dir = pathlib.Path(args.out_dir)
@@ -151,7 +159,8 @@ def main() -> int:
     quality = report["quality"]
     print(f"\n[artifact] {out_path}", file=sys.stderr)
     print(f"[quality] candidates={quality['candidate_count']} "
-          f"incomplete={quality['incomplete_count']}", file=sys.stderr)
+          f"incomplete={quality['incomplete_count']} "
+          f"truncated={quality.get('truncated', False)}", file=sys.stderr)
     return 0
 
 

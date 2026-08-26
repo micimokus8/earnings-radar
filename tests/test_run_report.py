@@ -4,7 +4,7 @@ from earnings_monitor.run_report import run_report
 
 
 class _Pipeline:
-    def run(self, symbols, *, as_of, date_from=None, date_to=None):
+    def run(self, symbols, *, as_of, date_from=None, date_to=None, deadline=None):
         return {
             "status": "PASS",
             "as_of": as_of,

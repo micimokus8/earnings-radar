@@ -14,12 +14,14 @@ def run_report(
     as_of: str,
     date_from=None,
     date_to=None,
+    deadline=None,
 ) -> dict:
     result = pipeline.run(
         symbols,
         as_of=as_of,
         date_from=date_from,
         date_to=date_to,
+        deadline=deadline,
     )
     return build_report(
         report_type=report_type,
@@ -27,6 +29,7 @@ def run_report(
         as_of=as_of,
         candidates=result.get("candidates", []),
         removed_duplicate_symbols=result.get("removed_duplicate_symbols", []),
+        truncated=result.get("truncated", False),
     )
 
 

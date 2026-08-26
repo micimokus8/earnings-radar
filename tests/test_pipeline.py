@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from earnings_monitor.pipeline import EarningsPipeline
@@ -74,6 +75,33 @@ class PipelineTests(unittest.TestCase):
         result = pipeline.run(["NASDAQ:AAPL"], as_of="2026-08-13T16:00:00+00:00")
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["candidates"][0]["sources"]["news"]["status"], "UNKNOWN")
+
+
+    def test_deadline_in_past_truncates_immediately(self):
+        pipeline = EarningsPipeline(
+            calendar=_Calendar(), quotes=_Quotes(), forecasts=_Forecasts(),
+            technicals=_Technicals(), news=_News(), short_interest=_ShortInterest(),
+        )
+        result = pipeline.run(
+            ["NASDAQ:AAPL", "NASDAQ:MSFT"],
+            as_of="2026-08-13T16:00:00+00:00",
+            deadline=time.monotonic() - 1,
+        )
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["candidates"], [])
+
+    def test_generous_deadline_completes_normally(self):
+        pipeline = EarningsPipeline(
+            calendar=_Calendar(), quotes=_Quotes(), forecasts=_Forecasts(),
+            technicals=_Technicals(), news=_News(), short_interest=_ShortInterest(),
+        )
+        result = pipeline.run(
+            ["NASDAQ:AAPL"],
+            as_of="2026-08-13T16:00:00+00:00",
+            deadline=time.monotonic() + 1000,
+        )
+        self.assertFalse(result["truncated"])
+        self.assertEqual(len(result["candidates"]), 1)
 
 
 if __name__ == "__main__":
