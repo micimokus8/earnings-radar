@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,9 +33,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 def _run(args, extra, *, capture=True, timeout=None):
     cmd = [sys.executable, str(SCRIPT_DIR / "run_scan.py"), *extra]
+    env = dict(os.environ)
+    env.setdefault("PYTHONPATH", str(SCRIPT_DIR.parent))
     if capture:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+    # Forward subprocess stderr to parent stderr so we can see crash traces
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, env=env)
 
 
 def _discover_symbols(args, timeout) -> list[str]:
