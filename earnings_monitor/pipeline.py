@@ -26,6 +26,7 @@ class EarningsPipeline:
         backoff_seconds: float = 0.75,
         sleep=time.sleep,
         throttle_seconds: float = 0.0,
+        symbol_timeout: float = 90.0,
     ):
         self.calendar = calendar
         self.quotes = quotes
@@ -39,8 +40,12 @@ class EarningsPipeline:
         self.backoff_seconds = max(0.0, float(backoff_seconds))
         self._sleep = sleep
         self.throttle_seconds = throttle_seconds
+        self.symbol_timeout = max(10.0, float(symbol_timeout))
         self._deadline = None
+        self._symbol_deadline = None
         self._truncated = False
+        self._candidates_built = 0
+
     @staticmethod
     def _unknown(error: Exception | str) -> dict:
         return {"status": "UNKNOWN", "error": str(error)}
@@ -48,6 +53,8 @@ class EarningsPipeline:
     def _call(self, client, *args, **kwargs):
         if self._deadline is not None and time.monotonic() >= self._deadline:
             return self._unknown("deadline_exceeded")
+        if self._symbol_deadline is not None and time.monotonic() >= self._symbol_deadline:
+            return self._unknown("symbol_deadline_exceeded")
         last_value = None
         if self.throttle_seconds and (
             self._deadline is None or time.monotonic() < self._deadline
@@ -55,6 +62,8 @@ class EarningsPipeline:
             self._sleep(self.throttle_seconds)
         for attempt in range(self.retries + 1):
             if self._deadline is not None and time.monotonic() >= self._deadline:
+                break
+            if self._symbol_deadline is not None and time.monotonic() >= self._symbol_deadline:
                 break
             try:
                 value = (
@@ -77,9 +86,18 @@ class EarningsPipeline:
                 self._sleep(self.backoff_seconds * (2 ** attempt))
         return last_value if last_value is not None else self._unknown("exhausted")
 
-    def run(self, symbols, *, as_of: str, date_from=None, date_to=None, deadline=None) -> dict:
+    def run(self, symbols, *, as_of: str, date_from=None, date_to=None,
+            deadline=None, on_candidate=None) -> dict:
+        """Run pipeline and build candidates.
+
+        ``on_candidate`` is called after each candidate is built with
+        ``(candidate_dict, index_0based, total_symbols)``. Used for
+        write-after-each-symbol.
+        """
         self._deadline = deadline
+        self._symbol_deadline = None
         self._truncated = False
+        self._candidates_built = 0
         try:
             requested_raw = list(dict.fromkeys(symbols))
             requested = dedupe_dual_class_symbols(requested_raw)
@@ -102,17 +120,25 @@ class EarningsPipeline:
                 if self._deadline is not None and time.monotonic() >= self._deadline:
                     self._truncated = True
                     break
+                # Per-symbol deadline: max symbol_timeout seconds per symbol
+                self._symbol_deadline = time.monotonic() + self.symbol_timeout
+                if self._deadline is not None:
+                    self._symbol_deadline = min(self._symbol_deadline, self._deadline)
+
                 event = event_by_symbol.get(symbol, {"status": "UNKNOWN", "symbol": symbol})
                 price = (quotes.get("quotes", {}).get(symbol, {}) or {}).get("price")
+
+                # Source order: SI first (most valuable, most fragile),
+                # then forecast, technicals, news last (least critical).
+                short_interest = self._call(self.short_interest, symbol, as_of=as_of)
                 forecast = self._call(self.forecasts, symbol, price=price)
                 technicals = self._call(self.technicals, symbol)
                 news = self._call(self.news, symbol, as_of=as_of)
-                short_interest = self._call(self.short_interest, symbol, as_of=as_of)
                 insider = self._call(self.insider, symbol, as_of) if self.insider else "UNKNOWN"
                 dilution = self._call(self.dilution, symbol, as_of) if self.dilution else "UNKNOWN"
                 insider_status = insider.get("status", "UNKNOWN") if isinstance(insider, dict) else insider
                 dilution_status = dilution.get("status", "UNKNOWN") if isinstance(dilution, dict) else dilution
-                candidates.append(build_candidate(
+                candidate = build_candidate(
                     symbol=symbol,
                     as_of=as_of,
                     calendar=event,
@@ -123,9 +149,17 @@ class EarningsPipeline:
                     short_interest=short_interest,
                     insider_status=insider_status,
                     dilution_status=dilution_status,
-                ))
+                )
+                candidates.append(candidate)
+                self._candidates_built += 1
+                if on_candidate:
+                    try:
+                        on_candidate(candidate, self._candidates_built - 1, len(requested))
+                    except Exception:
+                        pass  # callback failure must not break the pipeline
         finally:
             self._deadline = None
+            self._symbol_deadline = None
         return {
             "status": "PASS",
             "as_of": as_of,
@@ -139,5 +173,3 @@ class EarningsPipeline:
 
 
 __all__ = ["EarningsPipeline"]
-
-      

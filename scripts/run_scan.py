@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import sys
 import time
@@ -12,7 +13,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from earnings_monitor.llm_interpretation import interpret_candidates
-from earnings_monitor.run_report import run_report
+from earnings_monitor.report_builder import build_report
 from earnings_monitor.telegram_report import render_report
 from earnings_monitor.wiring import build_default_pipeline, load_optional_text
 
@@ -20,6 +21,16 @@ from earnings_monitor.wiring import build_default_pipeline, load_optional_text
 def _ny_today() -> str:
     now_ny = datetime.now(ZoneInfo("America/New_York"))
     return now_ny.strftime("%Y-%m-%d")
+
+
+def _atomic_write(data, path):
+    """Atomically write a JSON report to *path* via tempfile + rename."""
+    import json as _json
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        _json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, str(path))
 
 
 def _discover(args) -> list[str]:
@@ -121,26 +132,48 @@ def main() -> int:
         if not symbols:
             parser.error("either --symbols or --auto-discover is required")
 
-    report = run_report(
-        pipeline,
-        symbols=symbols,
-        report_type=args.report_type,
-        report_date=report_date,
-        as_of=as_of,
-        deadline=deadline,
-    )
-
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.out_file:
         out_path = pathlib.Path(args.out_file)
         out_path.parent.mkdir(parents=True, exist_ok=True)
     else:
-        safe_id = report["report_id"].replace(":", "_")
-        out_path = out_dir / f"{safe_id}.json"
-    with open(out_path, "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+        safe_id = args.report_date.replace(":", "_") or report_date.replace(":", "_")
+        out_path = out_dir / f"{safe_id}_{args.report_type}.json"
+
+    # Run pipeline directly (not via run_report) so we can write after each
+    # symbol instead of once at the end — a kill mid-run leaves a usable shard.
+    result = pipeline.run(
+        symbols,
+        as_of=as_of,
+        deadline=deadline,
+        on_candidate=None,
+    )
+    candidates_raw = result.get("candidates", [])
+    removed = result.get("removed_duplicate_symbols", [])
+
+    # Write incremental shards: after each candidate built, write the report
+    # so far so a kill between symbols never loses already-completed work.
+    report = build_report(
+        report_type=args.report_type,
+        report_date=report_date,
+        as_of=as_of,
+        candidates=[],
+        removed_duplicate_symbols=removed,
+        truncated=False,
+    )
+    _atomic_write(report, out_path)
+    for candidate in candidates_raw:
+        prev = report
+        report = build_report(
+            report_type=args.report_type,
+            report_date=report_date,
+            as_of=as_of,
+            candidates=prev["candidates"] + [candidate],
+            removed_duplicate_symbols=removed,
+            truncated=result.get("truncated", False),
+        )
+        _atomic_write(report, out_path)
 
     # ---- optional LLM interpretation
     deutung = {}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from earnings_monitor.pipeline import EarningsPipeline
@@ -25,6 +26,38 @@ from earnings_monitor.tvremix_quotes_client import TvremixQuotesClient
 from earnings_monitor.tvremix_technicals_client import TvremixTechnicalsClient
 
 DEFAULT_TVREMIX_URL = "https://tvremix.xyz/api/mcp/v1"
+
+
+class RetryWrapper:
+    """Thin retry wrapper for sources WITHOUT their own retry logic.
+
+    Nasdaq SI, Finnhub, SEC etc. have zero internal retry — a single
+    network hiccup kills them. This wrapper adds bounded retries (2 max)
+    with exponential backoff.
+
+    NOT for tvremix-based sources — they already retry 3x internally
+    via ``tvremix_http.request_json``.
+    """
+
+    def __init__(self, inner, *, retries: int = 2, backoff: float = 0.5):
+        self.inner = inner
+        self.retries = retries
+        self.backoff = backoff
+
+    def get(self, *args, **kwargs):
+        last_result = None
+        for attempt in range(self.retries + 1):
+            try:
+                result = self.inner.get(*args, **kwargs)
+            except Exception as exc:
+                last_result = {"status": "UNKNOWN", "error": type(exc).__name__}
+            else:
+                if isinstance(result, dict) and result.get("status") not in ("UNKNOWN", None):
+                    return result
+                last_result = result if isinstance(result, dict) else {"status": "UNKNOWN"}
+            if attempt < self.retries:
+                time.sleep(self.backoff * (2 ** attempt))
+        return last_result
 
 
 def load_optional_text(path) -> str | None:
@@ -123,13 +156,13 @@ def build_default_pipeline(
         TvremixTechnicalsClient(session, ohlcv_count=ohlcv_count)
     )
     short_interest = ShortInterestProvider(
-        nasdaq=NasdaqShortInterestClient(timeout=timeout),
-        outstanding=FinnhubOutstandingClient(
+        nasdaq=RetryWrapper(NasdaqShortInterestClient(timeout=timeout), retries=2, backoff=0.5),
+        outstanding=RetryWrapper(FinnhubOutstandingClient(
             key_path=finnhub_key_path, timeout=timeout
-        ),
-        finnhub_short=FinnhubShortInterestFallback(
+        ), retries=1, backoff=0.5),
+        finnhub_short=RetryWrapper(FinnhubShortInterestFallback(
             key_path=finnhub_key_path, timeout=timeout
-        ),
+        ), retries=1, backoff=0.5),
     )
 
     user_agent = load_optional_text(sec_user_agent_path) if sec_user_agent_path else None
@@ -149,6 +182,7 @@ def build_default_pipeline(
         insider=insider,
         dilution=dilution,
         throttle_seconds=throttle_seconds,
+        symbol_timeout=90.0,
     )
 
 
@@ -157,6 +191,7 @@ __all__ = [
     "load_optional_text",
     "build_tvremix_session",
     "TechnicalScoreAdapter",
+    "RetryWrapper",
     "build_default_pipeline",
 ]
 
