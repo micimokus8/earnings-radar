@@ -9,6 +9,10 @@ API endpoint: /api/quickcaldata/{yyyymmdd}/{rt}
 
 The response is a flat JSON array with one object per company, each
 carrying a ``ticker`` field.
+
+Note: The API requires an initial cookie consent. The client loads the
+calendar page first to establish a session, then calls the API with the
+same cookie jar.
 """
 
 from __future__ import annotations
@@ -16,27 +20,23 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+import http.cookiejar
 from datetime import date as Date
-from datetime import timedelta as TD
 
 _BASE_URL = "https://www.earningswhispers.com"
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
     "Accept": "application/json",
     "X-Requested-With": "XMLHttpRequest",
+    "Referer": f"{_BASE_URL}/calendar",
+}
+_PAGE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    "Accept": "text/html",
 }
 
 # Mapping from report type to EW session code
 _SESSION = {"BEFORE_OPEN": 1, "AFTER_CLOSE": 3}
-
-
-def _yyyymmdd(d: Date) -> str:
-    return d.strftime("%Y%m%d")
-
-
-def _ew_date(d: Date) -> str:
-    """Convert a Python date to the yyyymmdd format used by EW's API."""
-    return _yyyymmdd(d)
 
 
 class EarningsWhispersClient:
@@ -44,6 +44,25 @@ class EarningsWhispersClient:
 
     def __init__(self, *, timeout: float = 15.0):
         self.timeout = timeout
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
+        self._session_initialized = False
+
+    def _ensure_session(self) -> None:
+        """Load the calendar page once to establish cookies (consent)."""
+        if self._session_initialized:
+            return
+        try:
+            req = urllib.request.Request(
+                f"{_BASE_URL}/calendar",
+                headers=dict(_PAGE_HEADERS),
+            )
+            self._opener.open(req, timeout=self.timeout)
+        except (urllib.error.URLError, urllib.error.HTTPError,
+                TimeoutError, OSError):
+            pass  # Non-fatal — the API call is the real test
+        self._session_initialized = True
 
     def get_symbols(
         self,
@@ -56,13 +75,14 @@ class EarningsWhispersClient:
         """
         if target_date is None:
             target_date = Date.today()
+        self._ensure_session()
         rt = _SESSION.get(report_type.upper(), 1)
-        yyyymmdd = _ew_date(target_date)
+        yyyymmdd = target_date.strftime("%Y%m%d")
 
         url = f"{_BASE_URL}/api/quickcaldata/{yyyymmdd}/{rt}"
         try:
-            request = urllib.request.Request(url, headers=dict(_HEADERS))
-            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            req = urllib.request.Request(url, headers=dict(_HEADERS))
+            with self._opener.open(req, timeout=self.timeout) as resp:
                 if resp.status != 200:
                     return None
                 raw = resp.read().decode("utf-8")
