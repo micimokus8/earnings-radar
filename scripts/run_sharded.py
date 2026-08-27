@@ -26,6 +26,7 @@ from earnings_monitor.dedup import dedupe_dual_class_symbols
 from earnings_monitor.report_builder import merge_reports
 from earnings_monitor.telegram_report import render_report
 
+SPAWN_STAGGER = 8.0  # seconds between launching each parallel chunk
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -129,7 +130,9 @@ def main() -> int:
         f"{chunk_deadline:.0f}s pro Chunk, discovery {discover_elapsed:.0f}s\n"
     )
 
-    # ── launch all chunks in parallel ──────────────────────────────────
+    # ── launch all chunks with stagger ────────────────────────────────
+    # Each chunk is delayed by SPAWN_STAGGER seconds so TVRemix sees a
+    # staggered stream of requests instead of N simultaneous floods → 429.
     work = Path(tempfile.mkdtemp(prefix="earnings_shard_"))
     shard_paths: list[Path] = []
     procs: list[subprocess.Popen] = []
@@ -145,6 +148,8 @@ def main() -> int:
             "--tvremix-secret", args.tvremix_secret,
             "--finnhub-key", args.finnhub_key,
         ], capture=False))
+        if index > 0:
+            time.sleep(SPAWN_STAGGER)  # stagger to avoid 429
 
     # ── wait for all chunks, each with its own deadline ─────────────────
     # Every chunk gets the FULL per-chunk-deadline to work, independent of how
