@@ -22,7 +22,7 @@ class EarningsPipeline:
         short_interest,
         insider=None,
         dilution=None,
-        retries: int = 2,
+        retries: int = 0,
         backoff_seconds: float = 0.75,
         sleep=time.sleep,
         throttle_seconds: float = 0.0,
