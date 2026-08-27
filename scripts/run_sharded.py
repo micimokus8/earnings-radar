@@ -174,7 +174,7 @@ def main() -> int:
         sys.stderr.write(f"[verlust] {len(lost)} Symbol(e) fehlen: {', '.join(lost)}\n")
 
         # Parallel rescue: all lost symbols in one batch, each gets 120s
-        rescue_timeout = 120.0
+        rescue_timeout = 90.0
         sys.stderr.write(f"[rescue] starte {len(lost)} parallele Rettungen, je {rescue_timeout:.0f}s\n")
         rescue_procs: list[subprocess.Popen] = []
         rescue_paths: list[Path] = []
