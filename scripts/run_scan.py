@@ -34,16 +34,50 @@ def _atomic_write(data, path):
 
 
 def _discover(args) -> list[str]:
-    """Discover earnings symbols once (screener, NY date) and return the list."""
-    from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
-    target_date = args.target_date or _ny_today()
-    exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
-    discovery = ScreenerDiscoveryClient(
-        build_tvremix_session(secret_path=args.tvremix_secret),
-        exclude_prefixes=exclude,
-        min_market_cap=args.min_market_cap,
-    )
-    return discovery.get(target_date)[: max(args.max_symbols, 0)]
+    """Discover earnings symbols: EarningsWhispers primary, TVRemix fallback.
+
+    1. EarningsWhispers "Most Anticipated" list (session-specific: BEFORE_OPEN / AFTER_CLOSE)
+    2. If fewer than max-symbols: fill with TVRemix screener (--min-market-cap filter)
+    3. Hard cap at --max-symbols (12)
+    """
+    target_date_str = args.target_date or _ny_today()
+    max_sym = max(args.max_symbols, 1)
+
+    # 1. EarningsWhispers (primary, session-specific curated list)
+    from earnings_monitor.earningswhispers import EarningsWhispersClient
+    ew = EarningsWhispersClient(timeout=15.0)
+    try:
+        dt = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        from datetime import date as _Date
+        dt = _Date.today()
+    ew_symbols = ew.get_symbols(target_date=dt, report_type=args.report_type)
+    result: list[str] = []
+    if ew_symbols:
+        result = list(ew_symbols)[:max_sym]
+        sys.stderr.write(f"[discover] EW: {len(result)} Symbole\n")
+
+    # 2. Fill remaining slots from TVRemix screener (fallback, $10B+ market cap)
+    if len(result) < max_sym:
+        from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
+        exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
+        discovery = ScreenerDiscoveryClient(
+            build_tvremix_session(secret_path=args.tvremix_secret),
+            exclude_prefixes=exclude,
+            min_market_cap=args.min_market_cap,
+        )
+        extra = discovery.get(target_date_str)
+        existing = set(result)
+        for sym in extra:
+            # Strip exchange prefix from screener symbols for consistency
+            bare = sym.split(":")[-1].strip().upper() if ":" in sym else sym.upper()
+            if bare not in existing and len(result) < max_sym:
+                result.append(bare)
+                existing.add(bare)
+        if extra:
+            sys.stderr.write(f"[discover] Fallback: {len(extra)} extra Symbole (${args.min_market_cap/1e9:.0f}B+)\n")
+
+    return result[:max_sym]
 
 
 def main() -> int:
