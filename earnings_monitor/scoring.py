@@ -19,19 +19,32 @@ def score_candidate(values: dict) -> dict:
 
     unknown = []
     analyst_points = 0
-    if values.get("target_upside_pct") is None:
-        unknown.append("target_upside_pct")
-    elif values["target_upside_pct"] > 30:
-        analyst_points += 1
-    if values.get("eps_estimate") is None:
-        unknown.append("eps_estimate")
-    elif values["eps_estimate"] <= 0:
-        analyst_points += 1
-    if values.get("target_recently_cut") is None:
-        unknown.append("target_recently_cut")
-    elif values["target_recently_cut"]:
-        analyst_points += 1
-    categories["analyst_expectation"] = _category(analyst_points, 3, unknown)
+    # No analyst coverage at all: target_upside_pct AND target_recently_cut both None
+    # means the forecast returned zero analyst data. In that case, the entire category
+    # gets 0 points and state="N/A" — the calendar eps_estimate alone is not an
+    # analyst signal.
+    no_coverage = values.get("target_upside_pct") is None and values.get("target_recently_cut") is None
+    if no_coverage:
+        unknown = ["target_upside_pct", "target_recently_cut", "analyst_rating"]
+    else:
+        if values.get("target_upside_pct") is None:
+            unknown.append("target_upside_pct")
+        elif values["target_upside_pct"] > 30:
+            analyst_points += 1
+        if values.get("eps_estimate") is None:
+            unknown.append("eps_estimate")
+        elif values["eps_estimate"] <= 0:
+            analyst_points += 1
+        if values.get("target_recently_cut") is None:
+            unknown.append("target_recently_cut")
+        elif values["target_recently_cut"]:
+            analyst_points += 1
+    if no_coverage:
+        categories["analyst_expectation"] = {
+            "points": 0, "max_points": 3, "state": "N/A", "unknown": unknown,
+        }
+    else:
+        categories["analyst_expectation"] = _category(analyst_points, 3, unknown)
 
     if values.get("short_interest_supported") is False:
         # Exchange not covered by the Nasdaq SI source (e.g. NYSE). Neutrally
@@ -71,6 +84,21 @@ def score_candidate(values: dict) -> dict:
             unknown.append(field)
         else:
             chart_points += int(values[field] < threshold)
+    # Cap at 2/5 when the chart is bearish on ALL timeframes (all three
+    # price/EMA rules satisfied) — prevents a fully bearish chart from
+    # pushing a weak score into WATCH territory.
+    all_bearish = (
+        values.get("price_1d") is not None
+        and values.get("price_4h") is not None
+        and values.get("ema20_1d") is not None
+        and values.get("ema20_4h") is not None
+        and values.get("ema50_1d") is not None
+        and values["price_1d"] < values["ema20_1d"]
+        and values["price_4h"] < values["ema20_4h"]
+        and values["ema20_1d"] < values["ema50_1d"]
+    )
+    if all_bearish and chart_points > 2:
+        chart_points = 2
     categories["chart_confirmation"] = _category(chart_points, 5, unknown)
 
     unknown = []

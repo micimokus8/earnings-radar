@@ -162,54 +162,53 @@ def main() -> int:
     if lost:
         merged["quality"]["truncated"] = True
         sys.stderr.write(f"[verlust] {len(lost)} Symbol(e) fehlen im Report: {', '.join(lost)}\n")
-        # Sequential rescue pass: each lost symbol gets its own small scan,
-        # bounded by (remaining outer budget / number of lost symbols). This
-        # guarantees zero lost symbols in the steady state: the expensive
-        # mega-cap chunk produced a shard that was killed, but the individual
-        # tickers inside it can be rescued cheaply.
+        # Parallel rescue pass: launch ALL rescue subprocesses at once, then
+        # wait for ALL of them with the remaining budget. This fixes the old
+        # sequential approach where 15 symbols × 28s needed 420s but only 34s
+        # were left — now they all run concurrently in the available time.
         remaining = budget - (time.monotonic() - chunk_t0)
-        if remaining >= 35 and lost:
-            per_rescue = max(35.0, min(args.per_chunk_deadline, remaining / len(lost)))
-            sys.stderr.write(f"[rescue] starte Einzel-Rettung: {len(lost)} Symbol(e), je {per_rescue:.0f}s\n")
-            for sym in lost[:]:
-                # budget check between symbols
-                remaining = budget - (time.monotonic() - chunk_t0)
-                if remaining < 30:
-                    sys.stderr.write("[rescue] Budget aufgebraucht, Abbruch Rettung\n")
-                    break
-                per_sym = min(per_rescue, remaining - 6)  # 6s reserve for merge/write
-                if per_sym < 28:
-                    per_sym = remaining - 6
-                if per_sym < 20:
-                    break
+        if remaining >= 15 and lost:
+            per_rescue = max(15.0, min(args.per_chunk_deadline, remaining))
+            sys.stderr.write(f"[rescue] starte Parallel-Rettung: {len(lost)} Symbol(e), Budget {remaining:.0f}s, je {per_rescue:.0f}s\n")
+            rescue_procs: list[subprocess.Popen] = []
+            rescue_paths: list[Path] = []
+            for sym in lost:
                 rescue_path = work / f"rescue_{sym.replace(':', '_')}.json"
-                shard_paths.append(rescue_path)
-                rp = _run(args, [
+                rescue_paths.append(rescue_path)
+                rescue_procs.append(_run(args, [
                     "--symbols", sym,
                     "--report-type", args.report_type,
                     "--as-of", args.as_of or "",
                     "--out-file", str(rescue_path),
-                    "--deadline-seconds", str(per_sym),
+                    "--deadline-seconds", str(per_rescue),
                     "--tvremix-secret", args.tvremix_secret,
                     "--finnhub-key", args.finnhub_key,
-                ], capture=False)
+                ], capture=False))
+            # Wait for ALL rescue subprocesses in parallel (they all started concurrently).
+            for rp in rescue_procs:
                 try:
-                    rp.wait(timeout=per_sym + 12)
+                    rp.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
-                    rp.kill()
+                    pass
+            # Kill any still-running
+            for rp in rescue_procs:
+                if rp.poll() is None:
                     try:
+                        rp.kill()
                         rp.wait(timeout=6)
                     except subprocess.TimeoutExpired:
                         pass
+            # Load all rescue shards that completed
+            for rescue_path in rescue_paths:
                 if rescue_path.exists():
                     try:
                         reports.append(json.loads(rescue_path.read_text()))
                     except Exception as exc:
                         sys.stderr.write(f"[rescue] shard {rescue_path} ungueltig: {exc}\n")
-                        continue
-                    sys.stderr.write(f"[rescue] {sym} gerettet\n")
+                    else:
+                        sys.stderr.write(f"[rescue] {rescue_path.stem.replace('rescue_', '')} gerettet\n")
                 else:
-                    sys.stderr.write(f"[rescue] {sym} weiterhin fehlend\n")
+                    sys.stderr.write(f"[rescue] {rescue_path.stem.replace('rescue_', '')} nicht rechtzeitig fertig\n")
             # Re-merge including rescued shards.
             if reports:
                 merged = merge_reports(reports, report_type=args.report_type)
@@ -224,7 +223,6 @@ def main() -> int:
                     merged["quality"]["truncated"] = True
                     sys.stderr.write(f"[verlust-nach-rescue] noch fehlend: {', '.join(lost2)}\n")
                 else:
-                    # Keep truncated flag if any shard was truncated (partial rescued shard).
                     merged["quality"]["truncated"] = any(
                         bool(r.get("quality", {}).get("truncated")) for r in reports
                     )
