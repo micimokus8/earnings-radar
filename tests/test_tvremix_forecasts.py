@@ -42,6 +42,16 @@ class TvremixForecastTests(unittest.TestCase):
         self.assertEqual(result["status"], "PASS")
         self.assertEqual(result["forecast"]["analyst_rating"], "hold")
 
+    def test_provider_no_data_is_explicitly_unknown(self):
+        result = parse_tvremix_forecast_response({
+            "success": False,
+            "error": "No analyst forecast data for NASDAQ:CANG",
+        })
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["error"], "no_forecast_data")
+        self.assertIn("No analyst forecast data", result["provider_error"])
+        self.assertIsNone(result["forecast"])
+
     def test_malformed_response_is_unknown(self):
         result = parse_tvremix_forecast_response({"data": "bad"})
         self.assertEqual(result["status"], "UNKNOWN")

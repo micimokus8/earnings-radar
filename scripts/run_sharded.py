@@ -97,6 +97,11 @@ def _load_shards(shard_paths: list[Path]) -> list[dict]:
     return reports
 
 
+def _bare_symbol(symbol: str) -> str:
+    """Compare discovery tickers with resolver-qualified report symbols."""
+    return str(symbol).split(":", 1)[-1].strip().upper()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sharded earnings scan (split + merge)")
     parser.add_argument("--report-type", default="BEFORE_OPEN",
@@ -170,11 +175,11 @@ def main() -> int:
     merged = merge_reports(reports, report_type=args.report_type)
 
     # ── detect lost symbols → parallel rescue ──────────────────────────
-    reported = {c["symbol"] for report in reports for c in report.get("candidates", [])}
+    reported = {_bare_symbol(c["symbol"]) for report in reports for c in report.get("candidates", [])}
     removed = set()
     for report in reports:
         removed |= set(report.get("quality", {}).get("removed_duplicate_symbols", []) or [])
-    expected = set(symbols) | removed
+    expected = {_bare_symbol(s) for s in symbols} | {_bare_symbol(s) for s in removed}
     lost = sorted(expected - reported)
     merged["quality"]["lost_symbols"] = lost
 
@@ -208,11 +213,11 @@ def main() -> int:
 
         if reports:
             merged = merge_reports(reports, report_type=args.report_type)
-            reported2 = {c["symbol"] for r in reports for c in r.get("candidates", [])}
+            reported2 = {_bare_symbol(c["symbol"]) for r in reports for c in r.get("candidates", [])}
             removed2 = set()
             for r in reports:
                 removed2 |= set(r.get("quality", {}).get("removed_duplicate_symbols", []) or [])
-            expected2 = set(symbols) | removed2
+            expected2 = {_bare_symbol(s) for s in symbols} | {_bare_symbol(s) for s in removed2}
             lost2 = sorted(expected2 - reported2)
             merged["quality"]["lost_symbols"] = lost2
             if lost2:

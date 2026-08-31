@@ -19,7 +19,9 @@ def _sample():
                     "target_upside_pct": 31.0, "target_recently_cut": False,
                     "short_pct_outstanding": 0.96, "days_to_cover": 2.42,
                     "rsi_1d": 41.4, "ema20_1d": 313.0, "ema50_1d": 309.0,
-                    "price_1d": 303.0, "negative_news": False,
+                    "price_1d": 303.0, "price_4h": 304.0, "adx_1d": 22.1,
+                    "macd_1d": 1.234, "macd_signal_1d": 1.111, "macd_histogram_1d": 0.123,
+                    "negative_news": False,
                     "insider_status": "NO_DIRECT_SELL",
                 },
                 "score": {
@@ -49,6 +51,9 @@ class TelegramReportTests(unittest.TestCase):
         self.assertIn("② Short", text)
         self.assertIn("③ Chart", text)
         self.assertIn("④ News/SEC", text)
+        self.assertIn("MACD", text)
+        self.assertIn("ADX", text)
+        self.assertIn("P1D", text)
         self.assertIn("Deutung: Starkes Setup", text)
         self.assertIn("RANKING", text)
         self.assertIn("Meine Empfehlung", text)

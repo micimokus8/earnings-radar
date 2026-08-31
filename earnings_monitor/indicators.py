@@ -79,5 +79,22 @@ def calculate_adx(bars, period: int = 14):
     return float(adx)
 
 
-__all__ = ["calculate_ema", "calculate_adx"]
+def calculate_macd(values, fast: int = 12, slow: int = 26, signal: int = 9):
+    """Return the latest MACD line, signal line and histogram."""
+    if min(fast, slow, signal) <= 0 or fast >= slow:
+        raise ValueError("MACD periods must satisfy 0 < fast < slow")
+    closes = [float(value) for value in values]
+    if len(closes) < slow + signal - 1:
+        return None
+    fast_ema = calculate_ema(closes, fast)
+    slow_ema = calculate_ema(closes, slow)
+    macd = [None if f is None or s is None else f - s
+            for f, s in zip(fast_ema, slow_ema)]
+    compact = [value for value in macd if value is not None]
+    signal_values = calculate_ema(compact, signal)
+    line, signal_line = macd[-1], signal_values[-1]
+    return {"line": line, "signal": signal_line, "histogram": line - signal_line}
+
+
+__all__ = ["calculate_ema", "calculate_adx", "calculate_macd"]
 

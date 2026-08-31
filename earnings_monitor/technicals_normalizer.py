@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from earnings_monitor.indicators import calculate_adx, calculate_ema
+from earnings_monitor.indicators import calculate_adx, calculate_ema, calculate_macd
 
 
 _FIELDS = (
     "price_1d", "price_4h", "ema20_1d", "ema20_4h", "ema50_1d",
-    "rsi_1d", "adx_1d",
+    "rsi_1d", "adx_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
 )
 
 
@@ -62,6 +62,13 @@ def normalize_technicals_for_score(result: dict) -> dict:
             values["adx_1d"] = adx
             if adx is None:
                 unknown.append("adx_1d")
+            macd = calculate_macd(closes)
+            if macd is None:
+                unknown.extend(["macd_1d", "macd_signal_1d", "macd_histogram_1d"])
+            else:
+                values["macd_1d"] = macd["line"]
+                values["macd_signal_1d"] = macd["signal"]
+                values["macd_histogram_1d"] = macd["histogram"]
 
     return {
         "status": "PASS" if not unknown else "PARTIAL",

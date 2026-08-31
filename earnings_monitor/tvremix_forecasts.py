@@ -28,6 +28,18 @@ def parse_tvremix_forecast_response(response, price=1.0) -> dict:
     response = _unwrap_mcp(response)
     if not isinstance(response, dict):
         return {"status": "UNKNOWN", "forecast": None, "error": "invalid_response"}
+    # TVRemix may return HTTP/MCP success while the backend has no analyst
+    # coverage. Preserve that provider-level reason instead of collapsing it
+    # into the generic parser error ``forecast_missing``.
+    if response.get("success") is False:
+        message = response.get("error") or "no_forecast_data"
+        return {
+            "status": "UNKNOWN",
+            "forecast": None,
+            "error": "no_forecast_data",
+            "provider_error": str(message),
+        }
+
     raw = response.get("data")
     if raw is None:
         results = response.get("results")
@@ -41,6 +53,12 @@ def parse_tvremix_forecast_response(response, price=1.0) -> dict:
     if isinstance(rating, dict):
         raw["analyst_rating"] = rating.get("recommendation")
     normalized = normalize_forecast(raw, price=price)
+    # TVRemix can deliberately reject a target when currency/unit consistency
+    # fails. Preserve that audit state; it is not a Free-tier/access failure.
+    if raw.get("target_mismatch") is True:
+        normalized["target_status"] = "REJECTED_MISMATCH"
+        if raw.get("quality_note"):
+            normalized["target_quality_note"] = str(raw["quality_note"])
     return {"status": normalized["status"], "forecast": normalized}
 
 

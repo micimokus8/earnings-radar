@@ -3,9 +3,12 @@ import unittest
 from pathlib import Path
 
 from earnings_monitor.pipeline import EarningsPipeline
-from earnings_monitor.tvremix_calendar_client import TvremixCalendarClient
-from earnings_monitor.tvremix_news_client import TvremixNewsClient
-from earnings_monitor.tvremix_quotes_client import TvremixQuotesClient
+from earnings_monitor.alternative_sources import (
+    FinnhubNewsClient,
+    FinnhubQuoteClient,
+    StaticCalendarClient,
+    TwelveDataTechnicalClient,
+)
 from earnings_monitor.wiring import (
     TechnicalScoreAdapter,
     build_default_pipeline,
@@ -59,9 +62,16 @@ class WiringTests(unittest.TestCase):
             finnhub_key_path=str(self.fh_key),
         )
         self.assertIsInstance(pipeline, EarningsPipeline)
-        self.assertIsInstance(pipeline.calendar, TvremixCalendarClient)
-        self.assertIsInstance(pipeline.quotes, TvremixQuotesClient)
-        self.assertIsInstance(pipeline.news, TvremixNewsClient)
+        self.assertIsInstance(pipeline.calendar, StaticCalendarClient)
+        # TVRemix is primary; free providers remain attached as fallbacks.
+        self.assertEqual(type(pipeline.quotes).__name__, "QuotePrimaryFallback")
+        self.assertEqual(type(pipeline.forecasts).__name__, "ForecastPrimaryFallback")
+        self.assertEqual(type(pipeline.news).__name__, "NewsPrimaryFallback")
+        self.assertEqual(type(pipeline.technicals).__name__, "TechnicalPrimaryFallback")
+        self.assertIsNotNone(pipeline.symbol_resolver)
+        self.assertIsInstance(pipeline.quotes.fallback, FinnhubQuoteClient)
+        self.assertIsInstance(pipeline.news.fallback, FinnhubNewsClient)
+        self.assertIsInstance(pipeline.technicals.fallback, TwelveDataTechnicalClient)
         # Without SEC user-agent file the SEC lookups stay disabled -> UNKNOWN states.
         self.assertIsNone(pipeline.insider)
         self.assertIsNone(pipeline.dilution)

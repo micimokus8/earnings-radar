@@ -61,12 +61,17 @@ def _discover(args) -> list[str]:
     if len(result) < max_sym:
         from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
         exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
-        discovery = ScreenerDiscoveryClient(
-            build_tvremix_session(secret_path=args.tvremix_secret),
-            exclude_prefixes=exclude,
-            min_market_cap=args.min_market_cap,
-        )
-        extra = discovery.get(target_date_str)
+        try:
+            discovery = ScreenerDiscoveryClient(
+                build_tvremix_session(secret_path=args.tvremix_secret),
+                exclude_prefixes=exclude,
+                min_market_cap=args.min_market_cap,
+            )
+            extra = discovery.get(target_date_str)
+        except Exception as exc:
+            # TVRemix is optional discovery only. Never discard EW results.
+            sys.stderr.write(f"[discover] TVRemix fallback unavailable: {type(exc).__name__}\n")
+            extra = []
         existing = set(result)
         for sym in extra:
             # Strip exchange prefix from screener symbols for consistency

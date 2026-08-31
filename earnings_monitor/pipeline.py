@@ -22,11 +22,12 @@ class EarningsPipeline:
         short_interest,
         insider=None,
         dilution=None,
-        retries: int = 0,
+        retries: int = 2,
         backoff_seconds: float = 0.75,
         sleep=time.sleep,
         throttle_seconds: float = 0.0,
         symbol_timeout: float = 90.0,
+        symbol_resolver=None,
     ):
         self.calendar = calendar
         self.quotes = quotes
@@ -41,6 +42,7 @@ class EarningsPipeline:
         self._sleep = sleep
         self.throttle_seconds = throttle_seconds
         self.symbol_timeout = max(10.0, float(symbol_timeout))
+        self.symbol_resolver = symbol_resolver
         self._deadline = None
         self._symbol_deadline = None
         self._truncated = False
@@ -100,6 +102,8 @@ class EarningsPipeline:
         self._candidates_built = 0
         try:
             requested_raw = list(dict.fromkeys(symbols))
+            if self.symbol_resolver is not None:
+                requested_raw = self.symbol_resolver.resolve_many(requested_raw)
             requested = dedupe_dual_class_symbols(requested_raw)
             removed_duplicate_symbols = [s for s in requested_raw if s not in set(requested)]
             calendar = self._call(
@@ -131,7 +135,7 @@ class EarningsPipeline:
                 # Source order: SI first (most valuable, most fragile),
                 # then forecast, technicals, news last (least critical).
                 short_interest = self._call(self.short_interest, symbol, as_of=as_of)
-                forecast = self._call(self.forecasts, symbol, price=price)
+                forecast = self._call(self.forecasts, symbol, price=price, as_of=as_of)
                 technicals = self._call(self.technicals, symbol)
                 news = self._call(self.news, symbol, as_of=as_of)
                 insider = self._call(self.insider, symbol, as_of) if self.insider else "UNKNOWN"

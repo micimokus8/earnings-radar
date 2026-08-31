@@ -44,6 +44,8 @@ def build_candidate(
         "price": quote_row.get("price"),
         "market_cap": quote_row.get("market_cap"),
         "eps_estimate": forecast_row.get("eps_estimate"),
+        "analyst_rating": forecast_row.get("analyst_rating"),
+        "target_average": forecast_row.get("target_average"),
         "target_upside_pct": forecast_row.get("target_upside_pct"),
         "target_recently_cut": forecast_row.get("target_recently_cut"),
         "short_pct_outstanding": short_interest.get("short_pct_outstanding"),
@@ -59,12 +61,13 @@ def build_candidate(
         key: technical_values.get(key)
         for key in (
             "price_1d", "price_4h", "ema20_1d", "ema20_4h", "ema50_1d",
-            "rsi_1d", "adx_1d",
+            "rsi_1d", "adx_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
         )
     })
-    # Persist top headline so telegram + LLM can display / judge sentiment.
+    # Persist real provider headlines so telegram + LLM can display them.
     headlines = news.get("headlines", []) if isinstance(news, dict) else []
-    top_headline = headlines[0].get("headline") if isinstance(headlines, list) and headlines and isinstance(headlines[0], dict) else None
+    headlines = [item for item in headlines if isinstance(item, dict) and item.get("headline")]
+    top_headline = headlines[0].get("headline") if headlines else None
 
     score = score_candidate(values)
     missing = list(score.get("missing", []))
@@ -91,8 +94,10 @@ def build_candidate(
             "dilution_status": dilution_status,
         },
         "score": score,
+        "headlines": headlines[:10],
         "top_headline": top_headline,
-        "top_headline_url": (headlines[0].get("link") if top_headline else None) if isinstance(headlines, list) and headlines and isinstance(headlines[0], dict) else None,
+        "top_headline_url": headlines[0].get("link") if headlines else None,
+        "news_source": news.get("source") if isinstance(news, dict) else None,
     }
 
 

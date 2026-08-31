@@ -19,13 +19,15 @@ def score_candidate(values: dict) -> dict:
 
     unknown = []
     analyst_points = 0
-    # No analyst coverage at all: target_upside_pct AND target_recently_cut both None
-    # means the forecast returned zero analyst data. In that case, the entire category
-    # gets 0 points and state="N/A" — the calendar eps_estimate alone is not an
-    # analyst signal.
-    no_coverage = values.get("target_upside_pct") is None and values.get("target_recently_cut") is None
+    # Analyst coverage exists when at least one real analyst field is present.
+    # Calendar EPS alone is not analyst coverage, but a TVRemix/Finnhub rating is.
+    has_analyst_signal = any(
+        values.get(field) is not None
+        for field in ("target_upside_pct", "eps_estimate", "analyst_rating")
+    )
+    no_coverage = not has_analyst_signal
     if no_coverage:
-        unknown = ["target_upside_pct", "target_recently_cut", "analyst_rating"]
+        unknown = ["target_upside_pct", "eps_estimate", "analyst_rating"]
     else:
         if values.get("target_upside_pct") is None:
             unknown.append("target_upside_pct")
@@ -34,6 +36,9 @@ def score_candidate(values: dict) -> dict:
         if values.get("eps_estimate") is None:
             unknown.append("eps_estimate")
         elif values["eps_estimate"] <= 0:
+            analyst_points += 1
+        rating = str(values.get("analyst_rating") or "").lower()
+        if rating in {"strong buy", "buy", "outperform", "overweight"}:
             analyst_points += 1
         if values.get("target_recently_cut") is None:
             unknown.append("target_recently_cut")
