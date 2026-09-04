@@ -13,14 +13,32 @@ def _category(points, max_points, unknown=None):
     }
 
 
+def _has_skip_flag(values: dict) -> str | None:
+    """Return a skip reason string if the candidate should be hard-skipped."""
+    # Pre-Earnings run-up: already pumped before earnings → eingepreist
+    c5 = values.get("change_5d_pct")
+    dist52 = values.get("distance_to_52w_pct")
+    if c5 is not None and dist52 is not None:
+        if c5 >= 15 and dist52 > -10:
+            return "EINGEPREIST"
+    # Overbought
+    rsi = values.get("rsi_1d")
+    if rsi is not None and rsi > 75:
+        return "OVERBOUGHT"
+    # Post-Earnings crash (LULU pattern)
+    d1 = values.get("daily_change_pct")
+    if d1 is not None and d1 <= -10:
+        return "POST_EARNINGS_CRASH"
+    return None
+
+
 def score_candidate(values: dict) -> dict:
     completeness = evaluate_core_completeness(values)
     categories = {}
 
+    # ── Analyst Expectation (3 pts) ────────────────────────────────────
     unknown = []
     analyst_points = 0
-    # Analyst coverage exists when at least one real analyst field is present.
-    # Calendar EPS alone is not analyst coverage, but a TVRemix/Finnhub rating is.
     has_analyst_signal = any(
         values.get(field) is not None
         for field in ("target_upside_pct", "eps_estimate", "analyst_rating")
@@ -51,9 +69,8 @@ def score_candidate(values: dict) -> dict:
     else:
         categories["analyst_expectation"] = _category(analyst_points, 3, unknown)
 
+    # ── Short Interest (3 pts) — calibrated for $2B+ caps ───────────────
     if values.get("short_interest_supported") is False:
-        # Exchange not covered by the Nasdaq SI source (e.g. NYSE). Neutrally
-        # excluded: no points, no unknown penalty, state signals "not applicable".
         categories["short_interest"] = {
             "points": 0, "max_points": 3, "state": "N/A", "unknown": [],
         }
@@ -65,47 +82,50 @@ def score_candidate(values: dict) -> dict:
         if short_pct is None:
             unknown.append("short_pct_outstanding")
         else:
-            short_points += int(short_pct > 10) + int(short_pct > 15)
+            short_points += int(short_pct > 3) + int(short_pct > 8)
         if days is None:
             unknown.append("days_to_cover")
         else:
-            short_points += int(days > 3)
+            short_points += int(days > 3) + int(days > 5)
+        short_points = min(short_points, 3)
         categories["short_interest"] = _category(short_points, 3, unknown)
 
+    # ── Chart Confirmation (5 pts) — Earnings-Hunt calibrated ───────────
+    # Contrarian bounce setup + "Raum nach oben" + pre-earnings protection
     unknown = []
     chart_points = 0
-    chart_rules = (
-        ("price_1d", "ema20_1d", "below"),
-        ("price_4h", "ema20_4h", "below"),
-        ("ema20_1d", "ema50_1d", "below"),
-    )
-    for left, right, _ in chart_rules:
-        if values.get(left) is None or values.get(right) is None:
-            unknown.append(f"{left}/{right}")
-        else:
-            chart_points += int(values[left] < values[right])
-    for field, threshold in (("rsi_1d", 40), ("adx_1d", 25)):
-        if values.get(field) is None:
-            unknown.append(field)
-        else:
-            chart_points += int(values[field] < threshold)
-    # Cap at 2/5 when the chart is bearish on ALL timeframes (all three
-    # price/EMA rules satisfied) — prevents a fully bearish chart from
-    # pushing a weak score into WATCH territory.
-    all_bearish = (
-        values.get("price_1d") is not None
-        and values.get("price_4h") is not None
-        and values.get("ema20_1d") is not None
-        and values.get("ema20_4h") is not None
-        and values.get("ema50_1d") is not None
-        and values["price_1d"] < values["ema20_1d"]
-        and values["price_4h"] < values["ema20_4h"]
-        and values["ema20_1d"] < values["ema50_1d"]
-    )
-    if all_bearish and chart_points > 2:
-        chart_points = 2
+
+    # ① Bounce Setup (2 pkt): oversold + below mean = revert potential
+    rsi = values.get("rsi_1d")
+    if rsi is None:
+        unknown.append("rsi_1d")
+    elif rsi < 40:
+        chart_points += 1
+    p1, e20 = values.get("price_1d"), values.get("ema20_1d")
+    if p1 is None or e20 is None:
+        unknown.append("price_1d/ema20_1d")
+    elif p1 < e20:
+        chart_points += 1
+
+    # ② Raum nach oben (2 pkt): distance to 52W high
+    dist52 = values.get("distance_to_52w_pct")
+    if dist52 is None:
+        unknown.append("distance_to_52w_pct")
+    elif dist52 <= -30:
+        chart_points += 2
+    elif dist52 <= -15:
+        chart_points += 1
+
+    # ③ Pre-Earnings Schutz (1 pkt): kein Run-up
+    c5 = values.get("change_5d_pct")
+    if c5 is None:
+        unknown.append("change_5d_pct")
+    elif c5 < 10:
+        chart_points += 1
+
     categories["chart_confirmation"] = _category(chart_points, 5, unknown)
 
+    # ── News & SEC (3 pts) ──────────────────────────────────────────────
     unknown = []
     news_points = 0
     if values.get("news_status") != "PASS":
@@ -123,9 +143,12 @@ def score_candidate(values: dict) -> dict:
     categories["news_and_sec"] = _category(news_points, 3, unknown)
 
     total = sum(category["points"] for category in categories.values())
+    skip_reason = _has_skip_flag(values)
     label = None
     if completeness["final_recommendation_allowed"]:
-        if total >= 10:
+        if skip_reason:
+            label = f"SKIP ({skip_reason})"
+        elif total >= 10:
             label = "STRONG_SETUP"
         elif total >= 6:
             label = "WATCH"
@@ -139,6 +162,7 @@ def score_candidate(values: dict) -> dict:
         "total_points": total,
         "max_points": 14,
         "label": label,
+        "skip_reason": skip_reason,
         "categories": categories,
     }
 

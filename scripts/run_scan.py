@@ -136,8 +136,12 @@ def main() -> int:
     if args.discover_only:
         symbols = _discover(args)
         if not symbols:
-            print(f"📅 {args.report_type.replace('_', ' ')} — "
-                  f"{(args.target_date or _ny_today())}: keine Symbole gefunden.")
+            # Print to stderr — run_sharded.py parses stdout via split()
+            # and would treat message words as ticker symbols.
+            sys.stderr.write(
+                f"[discover] keine Symbole für {args.report_type} "
+                f"{(args.target_date or _ny_today())}\n"
+            )
         else:
             print(" ".join(symbols))
         return 0

@@ -57,11 +57,16 @@ def build_candidate(
         "insider_status": insider_status,
         "dilution_status": dilution_status,
     }
+    for k in ("high_52w", "recent_high_60d", "daily_change_pct",
+              "change_5d_pct", "distance_to_52w_pct"):
+        values.setdefault(k, None)
     values.update({
         key: technical_values.get(key)
         for key in (
             "price_1d", "price_4h", "ema20_1d", "ema20_4h", "ema50_1d",
             "rsi_1d", "adx_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
+            "high_52w", "recent_high_60d", "daily_change_pct", "change_5d_pct",
+            "distance_to_52w_pct",
         )
     })
     # Persist real provider headlines so telegram + LLM can display them.

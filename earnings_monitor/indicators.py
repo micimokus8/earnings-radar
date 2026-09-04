@@ -96,5 +96,60 @@ def calculate_macd(values, fast: int = 12, slow: int = 26, signal: int = 9):
     return {"line": line, "signal": signal_line, "histogram": line - signal_line}
 
 
-__all__ = ["calculate_ema", "calculate_adx", "calculate_macd"]
+def high_52w(bars, lookback: int = 252):
+    """Highest high in the last *lookback* bars (default 252 trading days)."""
+    if not bars or len(bars) < 2:
+        return None
+    window = bars[-min(lookback, len(bars)):]
+    try:
+        return max(float(bar["h"]) for bar in window)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def recent_high(bars, lookback: int = 60):
+    """Highest high in the last *lookback* bars (resistance proxy)."""
+    return high_52w(bars, lookback=lookback)
+
+
+def daily_change_pct(bars):
+    """Percent change of the last close vs the previous close."""
+    if not bars or len(bars) < 2:
+        return None
+    try:
+        prev = float(bars[-2]["c"])
+        last = float(bars[-1]["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if prev == 0:
+        return None
+    return (last - prev) / prev * 100.0
+
+
+def change_pct(bars, lookback: int = 5):
+    """Percent change of the last close vs the close *lookback* bars ago."""
+    if not bars or len(bars) < lookback + 1:
+        return None
+    try:
+        old = float(bars[-(lookback + 1)]["c"])
+        last = float(bars[-1]["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if old == 0:
+        return None
+    return (last - old) / old * 100.0
+
+
+def distance_to_high_pct(price, high_value):
+    """Negative percentage: how far below *high_value* the *price* is."""
+    if price is None or high_value is None or high_value == 0:
+        return None
+    return (price - high_value) / high_value * 100.0
+
+
+__all__ = [
+    "calculate_ema", "calculate_adx", "calculate_macd",
+    "high_52w", "recent_high", "daily_change_pct", "change_pct",
+    "distance_to_high_pct",
+]
 

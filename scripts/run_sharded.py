@@ -41,6 +41,14 @@ def _run(args, extra, *, capture=True, timeout=None):
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, env=env)
 
 
+def _is_valid_ticker(symbol: str) -> bool:
+    """Filter garbage that would slip through stdout parsing."""
+    if not symbol or len(symbol) > 10:
+        return False
+    # Tickers are uppercase letters, digits, dots, dashes (e.g. BF.B, BRK-A)
+    return all(c.isupper() or c.isdigit() or c in ".-" for c in symbol)
+
+
 def _discover_symbols(args, timeout) -> list[str]:
     try:
         result = _run(args, [
@@ -58,7 +66,16 @@ def _discover_symbols(args, timeout) -> list[str]:
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         return []
-    return result.stdout.split()
+    raw = result.stdout.split()
+    # Defensive: filter out non-ticker garbage (emoji, German words, dates, etc.)
+    # that could appear if run_scan prints a human message to stdout.
+    valid = [s for s in raw if _is_valid_ticker(s)]
+    if len(valid) != len(raw):
+        sys.stderr.write(
+            f"[discover] {len(raw) - len(valid)} ungueltige Token herausgefiltert: "
+            f"{[s for s in raw if not _is_valid_ticker(s)]}\n"
+        )
+    return valid
 
 
 def _chunks(seq, size):
@@ -119,6 +136,8 @@ def main() -> int:
                         help="Timeout in seconds for the single discovery call")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
     parser.add_argument("--finnhub-key", default="Finhub Key.txt")
+    parser.add_argument("--sec-user-agent", default="SEC User-Agent.txt",
+                        help="File with SEC User-Agent string for insider/dilution lookups")
     parser.add_argument("--out-dir", default="data/reports")
     args = parser.parse_args()
 
@@ -127,7 +146,7 @@ def main() -> int:
     symbols = _discover_symbols(args, timeout=args.discovery_timeout)
     discover_elapsed = time.monotonic() - t_start
     if not symbols:
-        print(f"📅 {args.report_type.replace('_', ' ')} — keine Symbole gefunden.")
+        sys.stderr.write(f"[scan] keine Symbole für {args.report_type} gefunden.\n")
         return 0
 
     chunk_deadline = args.per_chunk_deadline
@@ -156,6 +175,7 @@ def main() -> int:
             "--deadline-seconds", str(chunk_deadline),
             "--tvremix-secret", args.tvremix_secret,
             "--finnhub-key", args.finnhub_key,
+            "--sec-user-agent", args.sec_user_agent,
         ], capture=False))
         if index > 0:
             time.sleep(SPAWN_STAGGER)  # stagger to avoid 429
@@ -203,6 +223,7 @@ def main() -> int:
                 "--deadline-seconds", str(rescue_timeout),
                 "--tvremix-secret", args.tvremix_secret,
                 "--finnhub-key", args.finnhub_key,
+                "--sec-user-agent", args.sec_user_agent,
             ], capture=False))
 
         _wait_all(rescue_procs, deadline=rescue_timeout)

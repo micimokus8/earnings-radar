@@ -7,8 +7,10 @@ and appended, never merged into the score.
 
 from __future__ import annotations
 
-_EMO = {"STRONG_SETUP": "🟢🟢", "WATCH": "🟢", "SKIP": "⚪"}
-_LABEL_DE = {"STRONG_SETUP": "STARKES Setup", "WATCH": "Beobachten", "SKIP": "SKIP"}
+_EMO = {"STRONG_SETUP": "🟢🟢", "WATCH": "🟢", "SKIP": "⚪", "SKIP (EINGEPREIST)": "🔴", "SKIP (OVERBOUGHT)": "🔴", "SKIP (POST_EARNINGS_CRASH)": "🔴"}
+_LABEL_DE = {"STRONG_SETUP": "STARKES Setup", "WATCH": "Beobachten", "SKIP": "SKIP",
+             "SKIP (EINGEPREIST)": "⚠ EINGEPREIST", "SKIP (OVERBOUGHT)": "⚠ OVERBOUGHT",
+             "SKIP (POST_EARNINGS_CRASH)": "⚠ POST-EARNINGS CRASH"}
 
 
 def _ticker(symbol: str) -> str:
@@ -29,6 +31,7 @@ def _candidate_header(candidate: dict, total: int, maxp: int) -> str:
     lab = (candidate.get("score") or {}).get("label")
     emoji = _EMO.get(lab, "◯")
     name = _ticker(candidate.get("symbol", "?"))
+    skip_reason = (candidate.get("score") or {}).get("skip_reason")
     if lab:
         return f"{emoji} {name} — Score: {total}/{maxp} — {_LABEL_DE.get(lab, lab)}"
     return f"{emoji} {name} — Score: {total}/{maxp} — ⚠ unvollständig"
@@ -103,7 +106,22 @@ def _candidate_rows(candidate: dict) -> list[str]:
     macd_signal = v.get("macd_signal_1d")
     macd_hist = v.get("macd_histogram_1d")
     chart_price_txt = f"Preis: P1D {_num(p1)} · P4H {_num(p4)}"
+    h52 = v.get("high_52w")
+    dist52 = v.get("distance_to_52w_pct")
+    c5 = v.get("change_5d_pct")
+    d1 = v.get("daily_change_pct")
+    room_txt = ""
+    if h52 is not None:
+        room_txt = f"·52W {_num(h52, '$')}"
+        if dist52 is not None:
+            room_txt += f" ({_num(dist52, '%')})"
+    if c5 is not None:
+        room_txt += f"·5d {_num(c5, '%')}"
+    if d1 is not None:
+        room_txt += f"·1d {_num(d1, '%')}"
     chart_trend_txt = f"Trend: RSI {_num(rsi, digits=1)} · ADX {_num(adx, digits=1)}{below}{ema_txt}"
+    if room_txt:
+        chart_trend_txt += f" | {room_txt.lstrip('·')}"
     if macd is not None and macd_signal is not None:
         chart_momentum_txt = (f"Momentum: MACD {_num(macd, digits=3)} / "
                               f"Signal {_num(macd_signal, digits=3)} · "
@@ -133,7 +151,7 @@ def _candidate_rows(candidate: dict) -> list[str]:
         key=lambda pair: (pair[1].get("published") or "", -pair[0]),
         reverse=True,
     )
-    for _, item in ordered_headlines[:5]:
+    for _, item in ordered_headlines[:2]:
         title = item.get("headline")
         if title:
             short = str(title).strip()

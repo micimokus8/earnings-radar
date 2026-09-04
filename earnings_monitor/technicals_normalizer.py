@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from earnings_monitor.indicators import calculate_adx, calculate_ema, calculate_macd
-
+from earnings_monitor.indicators import (
+    calculate_adx, calculate_ema, calculate_macd,
+    high_52w, recent_high, daily_change_pct, change_pct,
+    distance_to_high_pct,
+)
 
 _FIELDS = (
     "price_1d", "price_4h", "ema20_1d", "ema20_4h", "ema50_1d",
     "rsi_1d", "adx_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
+    "high_52w", "recent_high_60d", "daily_change_pct", "change_5d_pct",
+    "distance_to_52w_pct",
 )
 
 
@@ -69,6 +74,29 @@ def normalize_technicals_for_score(result: dict) -> dict:
                 values["macd_1d"] = macd["line"]
                 values["macd_signal_1d"] = macd["signal"]
                 values["macd_histogram_1d"] = macd["histogram"]
+
+            # Earnings-hunt metrics: 52w high, resistance proxy, run-up
+            h52 = high_52w(bars)
+            values["high_52w"] = h52
+            if h52 is None:
+                unknown.append("high_52w")
+            rh = recent_high(bars, 60)
+            values["recent_high_60d"] = rh
+            if rh is None:
+                unknown.append("recent_high_60d")
+            dcp = daily_change_pct(bars)
+            values["daily_change_pct"] = dcp
+            if dcp is None:
+                unknown.append("daily_change_pct")
+            c5 = change_pct(bars, 5)
+            values["change_5d_pct"] = c5
+            if c5 is None:
+                unknown.append("change_5d_pct")
+            price_1d = values.get("price_1d")
+            dist52 = distance_to_high_pct(price_1d, h52)
+            values["distance_to_52w_pct"] = dist52
+            if dist52 is None:
+                unknown.append("distance_to_52w_pct")
 
     return {
         "status": "PASS" if not unknown else "PARTIAL",

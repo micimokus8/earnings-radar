@@ -12,6 +12,7 @@ FMP Key.txt
 data/reports/
 data/snapshots/
 *.log
+stderr.txt
 
 # --- Python ---
 __pycache__/
