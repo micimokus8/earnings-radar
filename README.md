@@ -1,8 +1,8 @@
 # Earnings Monitor
 
-Deterministic earnings scan for US equities with a 4-category scoring system and Telegram delivery.
+Deterministic earnings scan for US equities mit 4-Kategorie Scoring, Telegram-Delivery und optionalem LLM Pump-Challenger.
 
-**Stack:** Hermes Agent cron → Python pipeline → TVRemix MCP data → Telegram output
+**Stack:** Hermes Agent cron → Python pipeline → TVRemix MCP data → Telegram
 
 ---
 
@@ -10,116 +10,141 @@ Deterministic earnings scan for US equities with a 4-category scoring system and
 
 ```
 EarningsWhispers API──┐
-                      ├── max 12 symbols ──▶ run_sharded.py ──▶ run_scan.py (parallel chunks)
-TVRemix Screener ($10B fallback) ──┘                              │
-                                                                   ├── SI (first)
-                                                                   ├── forecast
-                                                                   ├── technicals
-                                                                   └── news (last)
-                                                                   │
-                                                   write-after-each-symbol (atomic)
-                                                                   │
-                                                   render_report() ──▶ Telegram
+                      ├── max 12 symbols ──▶ run_sharded.py ──▶ run_scan.py (1 chunk, alle parallel)
+TVRemix Screener ($10B fallback) ──┘           │                    │
+                                                │                    ├── SI (first)
+                                                │                    ├── forecast
+                                                │                    ├── technicals → OHLCV → indicators
+                                                │                    ├── news
+                                                │                    └── SEC (insider/dilution, optional)
+                                                │
+                                                ├── Ticker-Filter (_is_valid_ticker) gegen Garbage
+                                                └── render_report() ──▶ Telegram
 ```
 
 ### Discovery
 
-Two-layer symbol discovery, with a hard cap of **12 symbols** per run:
+Zwei-Stufen Symbol-Discovery, Hard Cap **12 Symbole** pro Lauf:
 
-| Layer | Source | Session filter | Notes |
+| Stufe | Quelle | Session-Filter | Notes |
 |-------|--------|---------------|-------|
-| **Primary** | [EarningsWhispers API](https://www.earningswhispers.com) `/api/quickcaldata/{yyyymmdd}/{rt}` | `rt=1` (BTO), `rt=3` (ATC) | Curated "Most Anticipated" list, sorted by trader attention |
-| **Fallback** | TVRemix `run_screener` | date-sorted, `--min-market-cap 10B` | Fills remaining slots if EW returns < 12 |
+| **Primary** | [EarningsWhispers](https://www.earningswhispers.com) `/api/quickcaldata/{yyyymmdd}/{rt}` | `rt=1` (BTO), `rt=3` (ATC) | Kuratierte "Most Anticipated" Liste |
+| **Fallback** | TVRemix `run_screener` | Datum-sortiert, `--min-market-cap 10B` | Füllt Lücken wenn EW < 12 |
 
-The EW list is session-aware: a BEFORE_OPEN scan only pulls symbols reporting before the open, and AFTER_CLOSE only after-hours reporters.
+Die EW-Liste ist session-bewusst: BEFORE_OPEN scannt nur vor Börsenöffnung, AFTER_CLOSE nur nach Börsenschluss.
 
 ### Pipeline
 
-`EarningsPipeline` (`pipeline.py`) processes symbols sequentially **within** a chunk, but all chunks run in **parallel** subprocesses.
+`EarningsPipeline` (`pipeline.py`) verarbeitet Symbole **sequentiell innerhalb eines Chunks**. Einziger Chunk mit `--chunk-size 12` (Parallelisierung über Subprozesse). Pro Symbol 90s Timeout, gesamter Chunk 540s Deadline.
 
-**Source order** (SI first — highest value, most fragile):
+**Source Order** (SI first — höchster Wert, fragilste Quelle):
 
-1. **Short Interest** — Nasdaq API + Finnhub fallback, wrapped in `RetryWrapper` (2 retries × 0.5s backoff)
-2. **Forecast** — analyst ratings, EPS estimates, target prices (TVRemix, 3 internal retries)
-3. **Technicals** — OHLCV → local EMA20/EMA50/ADX/RSI calculation (`indicators.py`)
-4. **News** — headlines (TVRemix, 3 internal retries)
-
-**Bounded execution:**
-
-- **Symbol timeout:** 90s per symbol — if a single symbol's sources exceed this, the rest are marked `symbol_deadline_exceeded` and the pipeline moves to the next symbol
-- **Chunk deadline:** 290s per subprocess chunk — all symbols within must complete or be truncated
-- **Hard outer limit:** 600s Hermes cron timeout — the scheduler's kill switch, never approached in normal operation
+1. **Short Interest** — Nasdaq API + Finnhub Fallback, `RetryWrapper` (2 Retries × 0.5s)
+2. **Forecast** — Analyst Ratings, EPS-Schätzungen, Target-Preise (TVRemix, 3 interne Retries)
+3. **Technicals** — OHLCV → 52W-Hoch, 60d-Resistance, RSI, ADX, EMA20/50, MACD — alles lokal berechnet (`indicators.py`)
+4. **News** — Headlines (TVRemix, 3 Retries)
+5. **SEC** — Insider-Form4 + Dilution-Filings (optional, via --sec-user-agent)
 
 ### Write-after-each-symbol
 
-`run_scan.py` writes the report JSON **after every candidate** via `_atomic_write()` (tempfile + rename). A mid-run kill (timeout, OOM) loses at most the one symbol currently being processed — all previously completed symbols are already on disk.
+`run_scan.py` schreibt den Report JSON **nach jedem Kandidaten** via `_atomic_write()` (Tempfile + Rename). Ein Kill mitten im Lauf verliert maximal das aktuelle Symbol.
+
+### Garbage-Symbol-Schutz
+
+`run_sharded.py` filtert Discovery-Output mit `_is_valid_ticker()`: nur Großbuchstaben, Ziffern, Punkte, Bindestriche → erlaubt. Emoji, Kleinbuchstaben, Datumsstrings, deutsche Wörter → raus. "Keine Symbole"-Meldungen gehen nach **stderr**, nie nach stdout.
 
 ---
 
 ## Data Sources
 
-| Source | Endpoint | Data | Retry |
+| Quelle | Endpoint | Data | Retry |
 |--------|----------|------|-------|
-| **EarningsWhispers** | `GET /api/quickcaldata` | Curated "Most Anticipated" symbol list | None (fallback if fail) |
-| **TVRemix MCP** | `POST https://tvremix.xyz/api/mcp/v1` | Calendar, forecasts, technicals (OHLCV), news, quotes | 3 attempts, exponential backoff (429/502/503/504/timeout) |
-| **Nasdaq SI** | `GET api.nasdaq.com/api/quote/{ticker}/short-interest` | Short interest, days-to-cover, settlement date | `RetryWrapper` 2 attempts |
-| **Finnhub** | `stock/profile2` + `stock/measure` | Shares outstanding, short ratio (fallback) | `RetryWrapper` 1 attempt |
-| **SEC EDGAR** | `data.sec.gov/submissions/CIK...` | Insider filings (Form 4), dilution (S-1, S-3, etc.) | `RetryWrapper` 2 attempts (optional, requires User-Agent file) |
-
-### Retry policy
-
-- **TVRemix sources** (calendar, forecasts, technicals, news): retry 3× internally via `tvremix_http.` — **no** pipeline-level retry (avoids multiplicative explosion)
-- **Nasdaq SI, Finnhub, SEC**: wrapped in `RetryWrapper` with bounded retries (1–2) since they have **no** internal retry logic
-- Pipeline-level: `retries=0`
+| **EarningsWhispers** | `GET /api/quickcaldata` | Kuratierte Symbol-Liste | None (Fallback wenn fail) |
+| **TVRemix MCP** | `POST https://tvremix.xyz/api/mcp/v1` | Calendar, Forecasts, OHLCV, News, Quotes | 3× intern (429/502/503/504/Timeout) |
+| **Nasdaq SI** | `GET api.nasdaq.com/api/quote/{ticker}/short-interest` | Short Interest, DTC, Settlement-Date | `RetryWrapper` 2× |
+| **Finnhub** | `stock/profile2` + `stock/measure` | Shares Outstanding, Short Ratio (Fallback) | `RetryWrapper` 1× |
+| **SEC EDGAR** | `data.sec.gov/submissions/CIK...` | Insider Form4, Dilution (S-1/S-3) | `RetryWrapper` 2× (optional, via User-Agent File) |
 
 ---
 
-## Scoring
+## Scoring — Earnings-Hunt kalibriert
 
-Four categories, 14 points max:
+Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (Bounce + Raum + Squeeze + Überraschung).
 
-| Category | Max points | Key rules |
-|----------|-----------|-----------|
-| **① Analyst Expectation** | 3 | Upside > 30% (+1), positive EPS (+1), target recently cut (+1). **N/A** (0 pts) when no analyst coverage exists at all (`target_upside_pct` and `target_recently_cut` both None) |
-| **② Short Interest** | 3 | Short % > 10% (+1), > 15% (+1), days-to-cover > 3 (+1). **N/A** for NYSE/AMEX (no Nasdaq SI data) |
-| **③ Chart Confirmation** | 5 | 3 price/EMA rules + RSI < 40 + ADX < 25. **Capped at 2/5** when all three EMA rules are bearish (prevents a falling knife from generating WATCH) |
-| **④ News & SEC** | 3 | No negative news (+1), no insider selling (+1), no dilution filing (+1) |
+| Kategorie | Max | Earnings-Hunt Logik |
+|-----------|-----|---------------------|
+| **① Analyst Expectation** | 3 | Upside >30% (+1), EPS ≤0 → Surprise-Potential (+1), Rating Strong Buy/Buy (+1), Target gesenkt (+1). **N/A** wenn keine Coverage |
+| **② Short Interest** | 3 | DTC >3 (+1), >5 (+1); Short% >3% (+1), >8% (+1). Max 3. **N/A** bei Exchange ohne SI-Daten |
+| **③ Chart Confirmation** | 5 | **Bounce-Setup:** RSI<40 (+1), P<EMA20 (+1). **Raum nach oben:** >15% unterm 52W-Hoch (+1), >30% (+1). **Pre-Earnings-Schutz:** 5d-Change <+10% (+1) |
+| **④ News & SEC** | 3 | Keine neg. News (+1), kein Insider-Sell (+1), kein Dilution-Filing (+1) |
+
+### SKIP-Override (überschreibt Score)
+
+| Regel | Auslöser | Effect |
+|-------|----------|--------|
+| **EINGEPREIST** | `change_5d_pct ≥ 15%` UND `distance_to_52w > -10%` | 🔴 SKIP — Run-up zu nah am Hoch |
+| **OVERBOUGHT** | `RSI_1d > 75` | 🔴 SKIP — überkauft |
+| **POST_EARNINGS_CRASH** | `daily_change_pct ≤ -10%` | 🔴 SKIP — LULU-Fall |
 
 ### Labels
 
-| Score | Label | Meaning |
-|-------|-------|---------|
-| ≥ 10 | **STRONG_SETUP** | High-conviction candidate |
-| 6–9 | **WATCH** | Potential setup, needs review |
-| < 6 | **SKIP** | Weak or missing data |
-| — | None | Candidate has missing core fields (INCOMPLETE) |
+| Punkte | Label | Bedeutung |
+|--------|-------|-----------|
+| ≥ 10 | **STRONG_SETUP** 🟢🟢 | Earnings-Pump-Kandidat |
+| 6–9 | **WATCH** 🟢 | Potenzial, Review nötig |
+| < 6 oder SKIP-Override | **SKIP** ⚪/🔴 | Schwach oder Risiko |
+| — | None | Core-Felder fehlen (INCOMPLETE) |
 
-A candidate is `INCOMPLETE` if any of its core fields (`price`, `eps_estimate`, `ohlcv_1d`, `market_cap`, `short_pct_outstanding`, `days_to_cover`) are None. Incomplete candidates display scores but never receive a label or LLM interpretation.
+### Was der neue Score für AOUT/BBCP bedeutet
+
+**AOUT** (Pre-Earnings: $9.96, RSI 26.9, 52W $14.97):
+- Chart: RSI<40 (+1) + P<EMA20 (+1) + dist -33.5% (+2) + 5d +3% (+1) = **5/5**
+- Analyst: Upside 43.5% + EPS negativ + Strong Buy + Target gesenkt = **3/3**
+- Short: DTC 4.53 (+1) + Short% 1.62% (+0) = **1/3**
+- **Total: 10/14 → STRONG_SETUP** (vorher 7/14 WATCH) ✓
+
+**BBCP** (Pre-Earnings: $8.83, RSI 33.2, 52W $12.19):
+- Chart: RSI<40 (+1) + P<EMA20 (+1) + dist -27.6% (+1) + 5d +5% (+1) = **4/5**
+- Short: DTC 8.39 — new: >3 (+1) + >5 (+1) = **2/3** (vorher 1/3)
+- **Total: 9/14 → WATCH** (vorher 6/14) ✓
 
 ---
 
-## Telegram Output
+## Telegram-Output
 
-**Two messages per scan** (deterministic report + LLM interpretation):
+**Zwei Nachrichten pro Scan** (deterministischer Report + LLM Interpretation):
 
-| Cron job | Schedule (Mo–Fr) | What it sends |
-|----------|------------------|---------------|
-| `earnings-before-open` | **09:30 UTC** (11:30 DE) | Deterministic report: scores, category breakdown, ranking |
-| `earnings-before-llm` | **09:45 UTC** (11:45 DE) | LLM interpretation (2–3 sentence analysis + recommendation) |
-| `earnings-after-close` | **16:30 UTC** (18:30 DE) | Deterministic report |
-| `earnings-after-llm` | **16:45 UTC** (18:45 DE) | LLM interpretation |
+| Cron-Job | Schedule (Mo–Fr) | Output |
+|----------|------------------|--------|
+| `earnings-before-open` | **09:30 UTC** | Deterministischer Report: Score, Kategorie-Details, Ranking |
+| `earnings-before-llm` | **09:45 UTC** | LLM Pump-Challenger Analyse |
+| `earnings-after-close` | **16:30 UTC** | Deterministischer Report |
+| `earnings-after-llm` | **16:45 UTC** | LLM Pump-Challenger Analyse |
 
-Delivery target: Telegram chat `8686978363`. Both scan jobs use `no_agent=true` (stdout piped directly), the LLM jobs are LLM-driven.
+**Telegram-Format:**
+- Pro Symbol: Header (Emoji + Score + Label), 4 Kategorie-Zeilen, max **2 Headlines**
+- Chart-Zeile zeigt zusätzlich: `52W $14.97 (-33.50%)·5d 3.00%·1d -5.00%`
+- 🔴 bei SKIP-Override (EINGEPREIST, OVERBOUGHT, POST_EARNINGS_CRASH)
+- Ranking: Top 10 nach Score geordnet
 
-### LLM controls (no code edits needed)
+### LLM-Steuerung (keine Code-Änderungen)
 
 | File | Content | Effect |
 |------|---------|--------|
-| `LLM Enabled.txt` | `ON` / `OFF` | Enable/disable LLM interpretation |
-| `LLM Model.txt` | Model slug (e.g. `openai/gpt-4o-mini`) | Swap model at runtime |
-| `LLM Key.txt` | OpenRouter key `sk-or-…` | Auth; missing → deterministic only |
+| `LLM Enabled.txt` | `ON` / `OFF` | LLM Interpretation aktiv/deaktiv |
+| `LLM Model.txt` | Model-Slug (z.B. `openai/gpt-4o-mini`) | Model zur Laufzeit wechseln |
+| `LLM Key.txt` | OpenRouter Key `sk-or-…` | Auth; fehlt → nur deterministisch |
 
-Only the **interpretation** and **recommendation** are LLM-generated. Everything else (scores, ranks, category breakdowns) is deterministic.
+### LLM Pump-Challenger (P5)
+
+Der LLM-Prompt wurde für Earnings-Hunt umgebaut: statt Score-Interpretation bewertet er pro Kandidat:
+- **PUMP-THESE**: Welche Faktoren sprechen für einen Post-Earnings-Pump (Oversold + Raum + Squeeze + Surprise)?
+- **RISIKO**: Was spricht dagegen (Run-up, negatives Sentiment, schwache Analysten)?
+- **SCORE-CONFLICT**: Wenn deterministischer Score und Pump-Potential divergieren → Flag.
+
+Abschluss: Top-3-Ranking nach Pump-Potential (nicht nach Score).
+
+Der LLM **ändert nie Scores oder Labels** — er liefert eine zweite, unabhängige Perspektive.
 
 ---
 
@@ -127,21 +152,32 @@ Only the **interpretation** and **recommendation** are LLM-generated. Everything
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/run_sharded.py` | **Orchestrator:** EW discovery → split into parallel chunks → merge shards → render + write report. Called by cron. |
-| `scripts/run_scan.py` | **Worker:** receives a symbol batch, runs the pipeline, writes incremental shards. Called by `run_sharded.py` as subprocess. |
-| `scripts/llm_second.py` | Reads the latest deterministic report and sends an LLM interpretation message. |
-| `scripts/dry_run.py` | Network-free replay from cached fixtures. |
+| `scripts/run_sharded.py` | **Orchestrator:** EW Discovery → Ticker-Filter → run_scan Subprocess → Merge → Render + Write. Von Cron aufgerufen. |
+| `scripts/run_scan.py` | **Worker:** Erhält Symbol-Batch, führt Pipeline aus, schreibt inkrementelle Shards. Von `run_sharded.py` als Subprozess. |
+| `scripts/llm_second.py` | Liest deterministischen Report und sendet LLM Pump-Challenger Message. |
+| `scripts/dry_run.py` | Network-free Replay aus Cached Fixtures. |
 
-### run_sharded.py flags
+### run_sharded.py Flags
 
 ```
 --report-type BEFORE_OPEN|AFTER_CLOSE
---max-symbols 12              # Hard cap (EW + fallback)
---min-market-cap 10000000000  # Fallback universe floor
---exclude-prefixes "OTC:"     # Excluded exchanges
---chunk-size 3                # Symbols per parallel worker
---per-chunk-deadline 290      # Seconds per worker
---discovery-timeout 30        # Max seconds for EW + screener
+--max-symbols 12              # Hard Cap
+--min-market-cap 10000000000  # Screener-Floor
+--exclude-prefixes "OTC:"     # Ausgeschlossene Exchanges
+--chunk-size 12               # Ein Chunk (alle Symbole parallel)
+--per-chunk-deadline 540      # Budget pro Chunk
+--discovery-timeout 30        # Max Sekunden für EW + Screener
+--sec-user-agent "SEC User-Agent.txt"  # Optional: Insider/Dilution
+```
+
+### Timing Budget
+
+```
+Discovery (EW + Fallback):    30s
+1 chunk × 12 Symbole × 90s:  540s (deadline)
+Rescue (parallel):             90s
+──────────────────────────────────
+Total max:                   660s  → vom 600s Cron-Timeout abgefangen
 ```
 
 ---
@@ -150,43 +186,27 @@ Only the **interpretation** and **recommendation** are LLM-generated. Everything
 
 | Module | Responsibility |
 |--------|---------------|
-| `earnings_monitor/earningswhispers.py` | EW API client, session-aware symbol discovery |
-| `earnings_monitor/pipeline.py` | Source orchestration, retry policy, symbol-level deadlines |
-| `earnings_monitor/scoring.py` | 14-point scoring with N/A logic for missing coverage |
-| `earnings_monitor/candidate.py` | Flattens source outputs into a normalized values dict |
-| `earnings_monitor/report_builder.py` | Assembles candidate list into a report, merge logic |
-| `earnings_monitor/telegram_report.py` | Renders report to formatted Telegram text |
-| `earnings_monitor/short_interest_provider.py` | Nasdaq SI + Finnhub fallback with exchange-awareness |
-| `earnings_monitor/indicators.py` | EMA20/EMA50/ADX from OHLCV candles |
-| `earnings_monitor/wiring.py` | Wires real clients into the pipeline, `RetryWrapper` helper |
-| `earnings_monitor/tvremix_http.py` | Low-level HTTP requester with 429-aware retry |
-
-### Probe/utility scripts
-
-- `scripts/probe_screener_*.py` — TVRemix screener diagnostics
-- `scripts/probe_mcp.py`, `scripts/probe_tools_list.py` — MCP session probes
-- `scripts/probe_calendar_*.py` — Calendar format discovery
-
----
-
-## Timing Budget
-
-```
-Discovery (EW + fallback):   30s
-4 chunks × 290s (parallel):  290s (wall clock = slowest chunk)
-Rescue (parallel):            90s
-────────────────────────────────
-Total max:                  410s  << 600s (Hermes cron timeout)
-```
+| `earnings_monitor/earningswhispers.py` | EW API Client, Session-bewusste Discovery |
+| `earnings_monitor/pipeline.py` | Source Orchestrierung, Retry-Policy, Symbol-Deadlines |
+| `earnings_monitor/scoring.py` | 14-Punkt Scoring + SKIP-Override für Earnings-Hunt |
+| `earnings_monitor/candidate.py` | Flattet Source-Outputs zu normalized values dict |
+| `earnings_monitor/report_builder.py` | Baut Report aus Candidates, Merge-Logik |
+| `earnings_monitor/telegram_report.py` | Rendert Report zu Telegram-Text (2 Headlines, Raum-Zeile) |
+| `earnings_monitor/short_interest_provider.py` | Nasdaq SI + Finnhub Fallback, Exchange-Aware |
+| `earnings_monitor/indicators.py` | EMA20/50, ADX, MACD, 52W-Hoch, 60d-High, DailyChange, Distance-to-High |
+| `earnings_monitor/technicals_normalizer.py` | Normalisiert OHLCV + Technicals zu Score-Feldern |
+| `earnings_monitor/wiring.py` | Verkabelt Clients, `RetryWrapper`, SEC-Konfiguration |
+| `earnings_monitor/tvremix_http.py` | Low-Level HTTP mit 429-aware Retry |
+| `earnings_monitor/llm_interpretation.py` | Pump-Challenger Prompt + Parser |
 
 ---
 
 ## Security Rules
 
-- No order execution
-- No API keys in the repository
-- Secrets stored in local files (mode 600), never committed
-- All timestamps in UTC internally, rendered in Europe/Berlin
-- Every score point is traceable to a concrete data value and source
-- Same input → same output (deterministic)
-- No silent data imputation; missing data is `UNKNOWN` or `N/A`
+- Keine Order-Ausführung
+- Keine API-Keys im Repository
+- Secrets in lokalen Files (mode 600), nie committed
+- Alle Timestamps UTC intern, Telegram in Europe/Berlin
+- Jeder Score-Punkt ist auf konkrete Daten + Quelle rückführbar
+- Gleicher Input → gleicher Output (deterministisch, bis auf LLM)
+- Keine stille Daten-Imputation; fehlende Daten = `UNKNOWN` oder `N/A`
