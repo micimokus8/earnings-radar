@@ -79,7 +79,10 @@ class EarningsWhispersClient:
         rt = _SESSION.get(report_type.upper(), 1)
         yyyymmdd = target_date.strftime("%Y%m%d")
 
-        url = f"{_BASE_URL}/api/quickcaldata/{yyyymmdd}/{rt}"
+        # 28.10.2026: EW hat /api/quickcaldata/<date>/<session> abgeschaltet (404).
+        # Der Kalender laedt jetzt /api/caldata/<date> und filtert die Session
+        # clientseitig ueber `releaseTime` (1 = before open, 3 = after close).
+        url = f"{_BASE_URL}/api/caldata/{yyyymmdd}"
         try:
             req = urllib.request.Request(url, headers=dict(_HEADERS))
             with self._opener.open(req, timeout=self.timeout) as resp:
@@ -94,13 +97,19 @@ class EarningsWhispersClient:
         if not isinstance(data, (list, tuple)):
             return None
 
-        symbols = []
-        for entry in data:
-            if not isinstance(entry, dict):
+        entries = [e for e in data if isinstance(e, dict)]
+        # Aeltere Payloads hatten kein releaseTime -> dann nicht filtern.
+        session_filter = any("releaseTime" in e for e in entries)
+
+        symbols: list[str] = []
+        for entry in entries:
+            if session_filter and entry.get("releaseTime") != rt:
                 continue
             ticker = entry.get("ticker") or entry.get("symbol")
             if isinstance(ticker, str) and ticker.strip():
-                symbols.append(ticker.strip().upper())
+                cleaned = ticker.strip().upper()
+                if cleaned not in symbols:
+                    symbols.append(cleaned)
         return symbols if symbols else None
 
 

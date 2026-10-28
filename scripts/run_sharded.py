@@ -195,6 +195,9 @@ def main() -> int:
                         help="Gesamtbudget in Sekunden; muss unter dem Cron-Timeout "
                              "(600s) bleiben, damit das Skript selbst sauber endet")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
+    parser.add_argument("--chunk-workers", type=int, default=1,
+                        help="Parallele Chunks (Default 1 = sequenziell, "
+                             "TwelveData-Limiter serialisiert ohnehin)")
     parser.add_argument("--use-tvremix", action="store_true",
                         help="TVRemix als Primary (Default: aus, Dienst eingestellt)")
     parser.add_argument("--finnhub-key", default="Finhub Key.txt")
@@ -236,9 +239,22 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="earnings_shard_"))
     shard_paths: list[Path] = []
     procs: list[subprocess.Popen] = []
-    for index, chunk in enumerate(_chunks(symbols, args.chunk_size)):
+    chunks = list(_chunks(symbols, args.chunk_size))
+    workers = max(1, min(args.chunk_workers, len(chunks)))
+
+    # Parallele Chunks bringen bei TwelveData nichts: der Credit-Limiter
+    # (7,6s/Request) ist prozessuebergreifend per Datei-Lock serialisiert.
+    # 3 parallele Chunks bekommen je 1/3 der Slots, reissen dann ihr
+    # Chunk-Deadline und verlieren die letzten Symbole (28.10.: 3 von 12).
+    # Sequenziell: 4 Symbole = ~91s, 3 Chunks = ~275s, alle Symbole kommen durch.
+    for index, chunk in enumerate(chunks):
         shard_path = work / f"shard_{index}.json"
         shard_paths.append(shard_path)
+        # Bei sequenziellen Chunks das Restbudget neu bewerten, sonst laeuft
+        # der letzte Chunk in die 60s-Untergrenze.
+        chunk_deadline = _effective_chunk_deadline(
+            args.per_chunk_deadline, budget_end, time.monotonic(), rescue_reserve,
+        )
         procs.append(_run(args, [
             "--symbols", ",".join(chunk),
             "--report-type", args.report_type,
@@ -250,14 +266,17 @@ def main() -> int:
             "--sec-user-agent", args.sec_user_agent,
             *(["--use-tvremix"] if args.use_tvremix else []),
         ], capture=False))
-        if index > 0:
+        if workers == 1:
+            _wait_all([procs[-1]], deadline=chunk_deadline)
+        elif index > 0:
             time.sleep(SPAWN_STAGGER)  # stagger to avoid 429
 
     # ── wait for all chunks, each with its own deadline ─────────────────
     # Every chunk gets the FULL per-chunk-deadline to work, independent of how
     # long other chunks take. The scheduler's 600s cron timeout is the
     # absolute outer safety net — no shrinking budget needed here.
-    _wait_all(procs, deadline=chunk_deadline)
+    if workers > 1:
+        _wait_all(procs, deadline=chunk_deadline)
     chunk_elapsed = time.monotonic() - t_start
     reports = _load_shards(shard_paths)
 

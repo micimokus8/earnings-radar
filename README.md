@@ -32,6 +32,11 @@ Zwei-Stufen Symbol-Discovery, Hard Cap **12 Symbole** pro Lauf:
 | **Primary** | [EarningsWhispers](https://www.earningswhispers.com) `/api/quickcaldata/{yyyymmdd}/{rt}` | `rt=1` (BTO), `rt=3` (ATC) | Kuratierte "Most Anticipated" Liste |
 | **Fallback** | TVRemix `run_screener` | Datum-sortiert, `--min-market-cap 10B` | Füllt Lücken wenn EW < 12 (TVRemix ist seit 28.10. abgeschaltet → Fallback liefert meist nichts) |
 
+**EW-Endpoint (28.10. geändert):** `/api/quickcaldata/<datum>/<session>` liefert 404.
+Der Kalender nutzt jetzt `/api/caldata/<datum>` (~250 Einträge/Tag, nach Relevanz
+sortiert) und filtert die Session clientseitig über `releaseTime`
+(1 = before open, 3 = after close). Die Top-12 der Liste sind die Mega-Caps.
+
 Die EW-Liste ist session-bewusst: BEFORE_OPEN scannt nur vor Börsenöffnung, AFTER_CLOSE nur nach Börsenschluss.
 
 ### Pipeline
@@ -213,6 +218,20 @@ ohne Re-Autorisierung verfallen.
 |--------|---------|
 | `scripts/run_sharded.py` | **Orchestrator:** EW Discovery → Ticker-Filter → run_scan Subprocess → Merge → Render + Write. Von Cron aufgerufen. |
 | `scripts/run_scan.py` | **Worker:** Erhält Symbol-Batch, führt Pipeline aus, schreibt inkrementelle Shards. Von `run_sharded.py` als Subprozess. `--max-chars 0` (Default) = ungeschnitten. |
+| `scripts/cron_before_open.sh` | Cron-Einstieg BEFORE_OPEN (09:30 UTC). |
+| `scripts/cron_after_close.sh` | Cron-Einstieg AFTER_CLOSE (16:30 UTC). |
+
+**Chunks laufen sequenziell (Default).** Der TwelveData-Limiter (7,6 s pro
+Request) ist prozessübergreifend per Datei-Lock serialisiert — parallele Chunks
+bekommen je nur einen Bruchteil der Slots, reißen ihr eigenes Chunk-Deadline und
+verlieren die letzten Symbole (28.10.: 3 von 12). Sequenziell: 12 Symbole in
+259 s, 0 Verluste. `--chunk-workers N` schaltet Parallelität zurück, wenn eine
+Quelle ohne Rate-Limit genutzt wird.
+
+**Deployment:** In `~/.hermes/scripts/` liegen **echte Wrapper-Dateien**
+(`exec bash <repo>/scripts/... "$@"`), **keine Symlinks**. Der Scheduler löst
+Symlinks auf und blockt Ziele außerhalb von `~/.hermes/scripts`
+(„script path resolves outside the scripts directory").
 | `scripts/llm_second.py` | Liest deterministischen Report und sendet LLM Pump-Challenger Message. |
 | `scripts/dry_run.py` | Network-free Replay aus Cached Fixtures. |
 
@@ -223,7 +242,8 @@ ohne Re-Autorisierung verfallen.
 --max-symbols 12              # Hard Cap
 --min-market-cap 10000000000  # Screener-Floor
 --exclude-prefixes "OTC:"     # Ausgeschlossene Exchanges
---chunk-size 4                # 4 Symbole pro Chunk (3 Chunks parallel)
+--chunk-size 4                # 4 Symbole pro Chunk
+--chunk-workers 1             # 1 = sequenziell (Default); TwelveData serialisiert ohnehin
 --per-chunk-deadline 280      # Budget pro Chunk (gemeinsame Deadline)
 --discovery-timeout 30        # Max Sekunden für EW + Screener
 --use-tvremix                 # optional: TVRemix als Primary (Default aus)
