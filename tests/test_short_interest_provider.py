@@ -20,6 +20,23 @@ class _FinnhubPassFallback:
                 "short_pct_outstanding": 1.1, "days_to_cover": None}
 
 
+class _EmptyNasdaq:
+    """NYSE-Fall (gemessen 28.10.): HTTP 200, aber leere Tabelle, kein Fehler."""
+
+    def get(self, symbol, *, as_of):
+        return {"status": "UNKNOWN", "report_date": None,
+                "shares_short": None, "days_to_cover": None, "short_pct_outstanding": None}
+
+
+class _BrokenNasdaq:
+    """Echter Fetch-Fehler (HTTP/Timeout) — darf NICHT als 'uncovered' gelten."""
+
+    def get(self, symbol, *, as_of):
+        return {"status": "UNKNOWN", "report_date": None, "shares_short": None,
+                "days_to_cover": None, "short_pct_outstanding": None,
+                "error": "HTTP 500"}
+
+
 class _FakeOutstanding:
     def __init__(self, value):
         self._value = value
@@ -61,6 +78,25 @@ class ShortInterestProviderTests(unittest.TestCase):
         self.assertTrue(result["exchange_unsupported"])
         self.assertIsNone(result["short_pct_outstanding"])
         self.assertIsNone(result["days_to_cover"])
+
+    def test_empty_nasdaq_table_is_exchange_na_for_bare_ticker(self):
+        # CMG/F/FDX/NOW/CVNA: Nasdaq liefert fuer NYSE-Werte 0 Zeilen. Vorher
+        # kamen nackte Nones zurueck -> rules.py stufte sie als INCOMPLETE ein
+        # und der Report zeigte keinen Verdict.
+        provider = ShortInterestProvider(
+            nasdaq=_EmptyNasdaq(), outstanding=_FakeOutstanding(14_800.0)
+        )
+        result = provider.get("FDX", as_of="2026-10-28T16:30:00+00:00")
+        self.assertEqual(result["status"], "N/A")
+        self.assertTrue(result["exchange_unsupported"])
+        self.assertIsNone(result["short_pct_outstanding"])
+
+    def test_fetch_error_is_not_treated_as_uncovered(self):
+        provider = ShortInterestProvider(
+            nasdaq=_BrokenNasdaq(), outstanding=_FakeOutstanding(14_800.0)
+        )
+        result = provider.get("FDX", as_of="2026-10-28T16:30:00+00:00")
+        self.assertFalse(result.get("exchange_unsupported", False))
 
     def test_nasdaq_fallback_for_nyse_through_finnhub(self):
         provider = ShortInterestProvider(

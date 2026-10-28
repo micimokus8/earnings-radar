@@ -39,7 +39,13 @@ class NasdaqShortInterestClient:
             if int(response.get("status", 0)) != 200:
                 return {**unknown, "error": f"HTTP {response.get('status')}"}
             payload = json.loads(response["body"].decode("utf-8"))
-            rows = payload["data"]["shortInterestTable"]["rows"]
+            table = (payload.get("data") or {}).get("shortInterestTable") or {}
+            rows = table.get("rows") or []
+            if not rows:
+                # NYSE-Werte: HTTP 200, aber leere Tabelle. Frueher warf
+                # table["rows"] hier einen TypeError und die Symbol-Abdeckung
+                # war nicht von einem echten Fehler unterscheidbar.
+                return {**unknown, "no_rows": True}
             return parse_nasdaq_short_interest(rows, as_of=as_of)
         except Exception as exc:
             return {**unknown, "error": type(exc).__name__}

@@ -59,9 +59,17 @@ class ShortInterestProvider:
                     fh["days_to_cover"] = nasdaq_values.get("days_to_cover")
                 fh.setdefault("exchange_unsupported", False)
                 return fh
-        # Nothing usable on either side — for explicitly non-Nasdaq keep the neutral N/A
-        # so rules/scoring remain neutral rather than penalizing as incomplete.
-        if not _is_nasdaq_listed(symbol) and nasdaq_values.get("short_pct_outstanding") is None:
+        # Nothing usable on either side. Nasdaq's short-interest endpoint only
+        # covers Nasdaq-listed symbols: for NYSE tickers it answers HTTP 200 with
+        # an EMPTY table (measured 28.10.: CMG/F/FDX/NOW/CVNA -> 0 rows, MSFT/KLAC
+        # -> 25 rows). 'No rows and no error' therefore means "not covered", not
+        # "data temporarily missing" -- returning bare Nones made rules.py mark
+        # those candidates INCOMPLETE and strip their verdict entirely.
+        fetch_failed = isinstance(si, dict) and bool(si.get("error"))
+        has_nasdaq_rows = isinstance(si, dict) and si.get("shares_short") is not None
+        uncovered = bool(si.get("no_rows")) if isinstance(si, dict) else False
+        uncovered = uncovered or (not has_nasdaq_rows and not fetch_failed)
+        if not _is_nasdaq_listed(symbol) or uncovered:
             return {
                 "status": "N/A",
                 "exchange_unsupported": True,
