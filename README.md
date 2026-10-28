@@ -132,7 +132,7 @@ Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (B
 | File | Content | Effect |
 |------|---------|--------|
 | `LLM Enabled.txt` | `ON` / `OFF` | LLM Interpretation aktiv/deaktiv |
-| `LLM Model.txt` | Model-Slug (z.B. `z-ai/glm-5.3-flash`) | Model zur Laufzeit wechseln |
+| `LLM Model.txt` | Model-Slug (aktuell `deepseek/deepseek-v4.1-flash`) | Model zur Laufzeit wechseln |
 | `LLM Key.txt` | OpenRouter Key `sk-or-…` | Auth; fehlt → nur deterministisch |
 
 ### LLM Pump-Challenger (P5)
@@ -152,12 +152,20 @@ Der LLM **ändert nie Scores oder Labels** — er liefert eine zweite, unabhäng
 die LLM-Ausgabe der Chunk-Subprozesse ins `DEVNULL`: die Interpretation wurde
 verworfen. `--no-llm` deaktiviert sie für einen Lauf.
 
-**Reasoning-Modelle:** `z-ai/glm-5.3-flash` denkt zuerst (`reasoning`) und liefert
-danach `content`. Mit `max_tokens=1600` war das Budget am 28.10. komplett vom
-Denken verbraucht → `content=null`, keine Interpretation. Deshalb:
-`max_tokens=6000` (Denken + Antwort), `content` wird null-sicher gelesen, und
-der Fehlerpfad nennt `finish_reason` + `reasoning_tokens`. `reasoning` lässt
-sich bei diesem Modell nicht per API abschalten (HTTP 400).
+**Reasoning-Modelle:** Sowohl `z-ai/glm-5.3-flash` als auch
+`deepseek/deepseek-v4.1-flash` denken zuerst (`reasoning`) und liefern danach
+`content`. Mit `max_tokens=1600` war das Budget am 28.10. komplett vom Denken
+verbraucht → `content=null`, keine Interpretation. Deshalb: `max_tokens=6000`
+(Denken + Antwort), `content` wird null-sicher gelesen, und der Fehlerpfad
+nennt `finish_reason` + `reasoning_tokens`. Abschalten ließ sich `reasoning`
+bei glm nicht per API (HTTP 400).
+
+Messung mit dem echten 5-Kandidaten-Prompt (28.10.):
+
+| Modell | Dauer | Reasoning | Kosten/Call |
+|--------|-------|-----------|-------------|
+| `z-ai/glm-5.3-flash` | 19–30s | ~1,5–3k Tokens | ~0,003 $ |
+| **`deepseek/deepseek-v4.1-flash`** | **8–14s** | ~3k Tokens | ~0,0028 $ |
 
 ---
 
