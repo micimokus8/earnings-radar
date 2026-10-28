@@ -166,7 +166,9 @@ class FinnhubQuoteClient(FinnhubBase):
                 raw_mcap = profile.get("marketCapitalization", profile.get("mktCap"))
                 if isinstance(raw_mcap, (int, float)) and raw_mcap > 0:
                     market_cap = float(raw_mcap) * 1_000_000
+            profile_name = profile.get("name") if isinstance(profile, dict) else None
             quotes[symbol] = {"price": float(quote["c"]), "market_cap": market_cap,
+                              "name": profile_name or None,
                               "source": "finnhub", "retrieved_at": datetime.now(timezone.utc).isoformat()}
             if market_cap is None:
                 errors[symbol] = "market_cap unavailable"
@@ -387,12 +389,22 @@ class TwelveDataTechnicalClient:
                     "error": self.last_error or "twelve-data OHLCV unavailable"}
         c1, c4 = [b["c"] for b in bars_1d], [b["c"] for b in bars_4h]
         macd = calculate_macd(c1)
+        # 52W-Hoch/Abstand/5d/1d lokal aus den Daily-Bars ableiten — die
+        # TVRemix-Technicals lieferten diese Felder direkt, TwelveData nicht.
+        year = bars_1d[-252:]
+        high_52w = max(b["h"] for b in year) if year else None
+        high_60d = max(b["h"] for b in bars_1d[-60:]) if bars_1d else None
         values = {"price_1d": c1[-1], "price_4h": c4[-1], "ema20_1d": calculate_ema(c1, 20)[-1],
                   "ema20_4h": calculate_ema(c4, 20)[-1], "ema50_1d": calculate_ema(c1, 50)[-1],
                   "rsi_1d": _rsi(c1), "adx_1d": calculate_adx(bars_1d, 14),
                   "macd_1d": macd["line"] if macd else None,
                   "macd_signal_1d": macd["signal"] if macd else None,
-                  "macd_histogram_1d": macd["histogram"] if macd else None}
+                  "macd_histogram_1d": macd["histogram"] if macd else None,
+                  "high_52w": high_52w,
+                  "recent_high_60d": high_60d,
+                  "distance_to_52w_pct": round((c1[-1] / high_52w - 1) * 100, 2) if high_52w else None,
+                  "change_5d_pct": round((c1[-1] / c1[-6] - 1) * 100, 2) if len(c1) >= 6 else None,
+                  "daily_change_pct": round((c1[-1] / c1[-2] - 1) * 100, 2) if len(c1) >= 2 else None}
         unknown = [key for key, value in values.items() if value is None]
         return {"status": "PASS" if not unknown else "PARTIAL", "values": values, "unknown": unknown,
                 "source": "twelve_data"}

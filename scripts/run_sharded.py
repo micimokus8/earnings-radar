@@ -195,6 +195,8 @@ def main() -> int:
                         help="Gesamtbudget in Sekunden; muss unter dem Cron-Timeout "
                              "(600s) bleiben, damit das Skript selbst sauber endet")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
+    parser.add_argument("--use-tvremix", action="store_true",
+                        help="TVRemix als Primary (Default: aus, Dienst eingestellt)")
     parser.add_argument("--finnhub-key", default="Finhub Key.txt")
     parser.add_argument("--sec-user-agent", default="SEC User-Agent.txt",
                         help="File with SEC User-Agent string for insider/dilution lookups")
@@ -246,6 +248,7 @@ def main() -> int:
             "--tvremix-secret", args.tvremix_secret,
             "--finnhub-key", args.finnhub_key,
             "--sec-user-agent", args.sec_user_agent,
+            *(["--use-tvremix"] if args.use_tvremix else []),
         ], capture=False))
         if index > 0:
             time.sleep(SPAWN_STAGGER)  # stagger to avoid 429
@@ -304,6 +307,7 @@ def main() -> int:
                     "--tvremix-secret", args.tvremix_secret,
                     "--finnhub-key", args.finnhub_key,
                     "--sec-user-agent", args.sec_user_agent,
+                    *(["--use-tvremix"] if args.use_tvremix else []),
                 ], capture=False))
             _wait_all(rescue_procs, deadline=rescue_timeout)
 

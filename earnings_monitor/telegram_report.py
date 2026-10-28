@@ -17,6 +17,18 @@ def _ticker(symbol: str) -> str:
     return str(symbol).split(":")[-1].strip()
 
 
+def _display(candidate: dict) -> str:
+    """Ticker plus Firmenname, z.B. 'CNC (Centene Corp)'."""
+    ticker = _ticker(candidate.get("symbol", "?"))
+    name = candidate.get("name")
+    if not name:
+        return ticker
+    name = str(name).strip()
+    if len(name) > 32:
+        name = name[:29].rstrip() + "…"
+    return f"{ticker} ({name})"
+
+
 def _num(value, suffix="", digits=2):
     if value is None:
         return "n/a"
@@ -30,7 +42,7 @@ def _num(value, suffix="", digits=2):
 def _candidate_header(candidate: dict, total: int, maxp: int) -> str:
     lab = (candidate.get("score") or {}).get("label")
     emoji = _EMO.get(lab, "◯")
-    name = _ticker(candidate.get("symbol", "?"))
+    name = _display(candidate)
     skip_reason = (candidate.get("score") or {}).get("skip_reason")
     if lab:
         return f"{emoji} {name} — Score: {total}/{maxp} — {_LABEL_DE.get(lab, lab)}"
@@ -173,7 +185,7 @@ def render_report(
     *,
     deutung: dict | None = None,
     empfehlung: str | None = None,
-    max_chars: int = 4096,
+    max_chars: int | None = None,
 ) -> str:
     deutung = deutung or {}
     empfehlung = (empfehlung or "").strip()
@@ -211,7 +223,7 @@ def render_report(
         ),
     )
     for i, c in enumerate(ranked[:10], 1):
-        ticker = _ticker(c.get("symbol", "?"))
+        ticker = _display(c)
         sc = (c.get("score") or {}).get("total_points", 0) or 0
         raw_label = (c.get("score") or {}).get("label")
         label = _LABEL_DE.get(raw_label, "unvollständig") if raw_label else "unvollständig"
@@ -224,7 +236,10 @@ def render_report(
         lines.append(empfehlung)
 
     text = "\n".join(lines).rstrip()
-    if len(text) <= max_chars:
+    # Standard: NICHT kuerzen. Hermes splittet lange Ausgaben selbst in so
+    # viele Telegram-Nachrichten wie noetig. max_chars bleibt als optionaler
+    # Hard-Cap fuer manuelle Laeufe.
+    if not max_chars or len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n\n… (Report gekürzt, vollständig in data/reports/)"
 

@@ -124,6 +124,8 @@ def main() -> int:
                         help="Optional file with SEC User-Agent string")
     parser.add_argument("--interpret", action="store_true",
                         help="Append LLM interpretation section")
+    parser.add_argument("--use-tvremix", action="store_true",
+                        help="TVRemix als Primary (Default: aus, Dienst eingestellt)")
     parser.add_argument("--llm-key", default="LLM Key.txt",
                         help="Key file (OpenRouter key)")
     parser.add_argument("--llm-model-file", default="LLM Model.txt",
@@ -133,7 +135,7 @@ def main() -> int:
     parser.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     parser.add_argument("--llm-enabled-file", default="LLM Enabled.txt",
                         help="File with ON/OFF to toggle LLM without code edits")
-    parser.add_argument("--max-chars", type=int, default=4096,
+    parser.add_argument("--max-chars", type=int, default=0,
                         help="Hard cap on rendered message length")
     parser.add_argument("--max-symbols", type=int, default=24,
                         help="Enrichment cap, size-neutral order (rate-limit safe)")
@@ -185,6 +187,7 @@ def main() -> int:
 
     pipeline = build_default_pipeline(
         tvremix_secret_path=args.tvremix_secret,
+        use_tvremix=args.use_tvremix,
         finnhub_key_path=args.finnhub_key,
         sec_user_agent_path=args.sec_user_agent,
         throttle_seconds=args.throttle,
@@ -291,7 +294,7 @@ def main() -> int:
         report,
         deutung=deutung,
         empfehlung=empfehlung,
-        max_chars=args.max_chars,
+        max_chars=args.max_chars or None,
     ))
 
     quality = report["quality"]

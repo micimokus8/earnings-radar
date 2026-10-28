@@ -89,5 +89,32 @@ class AlternativeSourceTests(unittest.TestCase):
         self.assertEqual(result["events"][0]["timing"], "UNKNOWN")
 
 
+class TwelveDataDerivedFieldsTests(unittest.TestCase):
+    def test_52w_and_changes_are_computed_from_daily_bars(self):
+        from earnings_monitor.alternative_sources import TwelveDataTechnicalClient
+
+        bars_1d = [{"o": 10, "h": 11, "l": 9, "c": 10 + i * 0.1, "v": 1} for i in range(260)]
+        bars_1d[-1] = {"o": 10, "h": 40.0, "l": 9, "c": 35.0, "v": 1}
+        bars_4h = [{"o": 10, "h": 11, "l": 9, "c": 10.5, "v": 1} for _ in range(40)]
+
+        def requester(url, *, headers, timeout):
+            import json as _json
+            payload = {"values": [
+                {"open": b["o"], "high": b["h"], "low": b["l"], "close": b["c"], "volume": b["v"]}
+                for b in (bars_1d if "interval=1day" in url else bars_4h)
+            ]}
+            return {"status": 200, "body": _json.dumps(payload)}
+
+        client = TwelveDataTechnicalClient(key="k", requester=requester, rate_limit=False)
+        result = client.get("AAPL")
+
+        values = result["values"]
+        self.assertEqual(values["high_52w"], 40.0)
+        self.assertAlmostEqual(values["distance_to_52w_pct"], -12.5, places=1)
+        self.assertIsNotNone(values["change_5d_pct"])
+        self.assertIsNotNone(values["daily_change_pct"])
+        self.assertIsNotNone(values["recent_high_60d"])
+
+
 if __name__ == "__main__":
     unittest.main()

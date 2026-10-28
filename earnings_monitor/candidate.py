@@ -84,6 +84,7 @@ def build_candidate(
 
     return {
         "symbol": symbol,
+        "name": quote_row.get("name"),
         "as_of": as_of,
         "status": status,
         "missing": missing,

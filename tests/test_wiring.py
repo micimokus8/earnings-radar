@@ -4,6 +4,7 @@ from pathlib import Path
 
 from earnings_monitor.pipeline import EarningsPipeline
 from earnings_monitor.alternative_sources import (
+    FinnhubForecastClient,
     FinnhubNewsClient,
     FinnhubQuoteClient,
     StaticCalendarClient,
@@ -56,25 +57,37 @@ class WiringTests(unittest.TestCase):
     def test_load_optional_text_returns_none_for_missing_file(self):
         self.assertIsNone(load_optional_text("/nonexistent/ua.txt"))
 
-    def test_builds_pipeline_with_real_clients(self):
+    def test_builds_pipeline_with_alternative_sources_by_default(self):
+        # TVRemix wurde am 28.10. abgeschaltet -> Default sind TwelveData
+        # (OHLCV/Indikatoren) und Finnhub (Quotes/Forecast/News).
         pipeline = build_default_pipeline(
-            tvremix_secret_path=str(self.tv_secret),
             finnhub_key_path=str(self.fh_key),
+            twelvedata_key_path=str(self.fh_key),
         )
         self.assertIsInstance(pipeline, EarningsPipeline)
         self.assertIsInstance(pipeline.calendar, StaticCalendarClient)
-        # TVRemix is primary; free providers remain attached as fallbacks.
+        self.assertIsInstance(pipeline.quotes, FinnhubQuoteClient)
+        self.assertIsInstance(pipeline.forecasts, FinnhubForecastClient)
+        self.assertIsInstance(pipeline.news, FinnhubNewsClient)
+        self.assertIsInstance(pipeline.technicals, TwelveDataTechnicalClient)
+        self.assertEqual(type(pipeline.symbol_resolver).__name__, "PlainSymbolResolver")
+        # Without SEC user-agent file the SEC lookups stay disabled -> UNKNOWN states.
+        self.assertIsNone(pipeline.insider)
+        self.assertIsNone(pipeline.dilution)
+
+    def test_optional_tvremix_primary_still_available(self):
+        pipeline = build_default_pipeline(
+            tvremix_secret_path=str(self.tv_secret),
+            finnhub_key_path=str(self.fh_key),
+            twelvedata_key_path=str(self.fh_key),
+            use_tvremix=True,
+        )
         self.assertEqual(type(pipeline.quotes).__name__, "QuotePrimaryFallback")
         self.assertEqual(type(pipeline.forecasts).__name__, "ForecastPrimaryFallback")
         self.assertEqual(type(pipeline.news).__name__, "NewsPrimaryFallback")
         self.assertEqual(type(pipeline.technicals).__name__, "TechnicalPrimaryFallback")
-        self.assertIsNotNone(pipeline.symbol_resolver)
         self.assertIsInstance(pipeline.quotes.fallback, FinnhubQuoteClient)
-        self.assertIsInstance(pipeline.news.fallback, FinnhubNewsClient)
         self.assertIsInstance(pipeline.technicals.fallback, TwelveDataTechnicalClient)
-        # Without SEC user-agent file the SEC lookups stay disabled -> UNKNOWN states.
-        self.assertIsNone(pipeline.insider)
-        self.assertIsNone(pipeline.dilution)
 
     def test_enables_sec_lookups_when_user_agent_present(self):
         ua_path = Path(self._tmp.name) / "ua.txt"

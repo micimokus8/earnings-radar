@@ -69,6 +69,27 @@ class TelegramReportTests(unittest.TestCase):
         text = render_report(_sample(), max_chars=200)
         self.assertIn("gekürzt", text)
 
+    def test_no_truncation_by_default(self):
+        # Ohne max_chars darf nichts gekuerzt werden — Hermes splittet
+        # lange Ausgaben selbst in mehrere Telegram-Nachrichten.
+        report = _sample()
+        report["candidates"] = report["candidates"] * 12
+        text = render_report(report)
+        self.assertNotIn("gekürzt", text)
+        self.assertGreater(len(text), 4096)
+
+    def test_company_name_is_rendered_next_to_ticker(self):
+        report = _sample()
+        report["candidates"][0]["name"] = "Apple Inc."
+        text = render_report(report)
+        self.assertIn("AAPL (Apple Inc.)", text)
+        # Auch im Ranking.
+        self.assertIn("AAPL (Apple Inc.) — ", text.split("RANKING", 1)[1])
+
+    def test_missing_name_falls_back_to_ticker(self):
+        text = render_report(_sample())
+        self.assertIn("AAPL — Score", text)
+
 
 if __name__ == "__main__":
     unittest.main()

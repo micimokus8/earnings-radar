@@ -12,14 +12,15 @@ Deterministic earnings scan for US equities mit 4-Kategorie Scoring, Telegram-De
 EarningsWhispers API──┐
                       ├── max 12 symbols ──▶ run_sharded.py ──▶ run_scan.py (3 Chunks à 4, parallel)
 TVRemix Screener ($10B fallback) ──┘           │                    │
-                                                │                    ├── SI (first)
-                                                │                    ├── forecast
-                                                │                    ├── technicals → OHLCV → indicators
-                                                │                    ├── news
+                                                │                    ├── SI (first, Nasdaq/Finnhub)
+                                                │                    ├── forecast (Finnhub)
+                                                │                    ├── technicals (TwelveData → Indikatoren lokal)
+                                                │                    ├── news (Finnhub → Yahoo-RSS-Fallback)
                                                 │                    └── SEC (insider/dilution, optional)
                                                 │
                                                 ├── Ticker-Filter (_is_valid_ticker) gegen Garbage
-                                                └── render_report() ──▶ Telegram
+                                                ├── Firmennamen (Finnhub profile2) an jeden Kandidaten
+                                                └── render_report() ──▶ Telegram (ungeschnitten, N Nachrichten)
 ```
 
 ### Discovery
@@ -29,7 +30,7 @@ Zwei-Stufen Symbol-Discovery, Hard Cap **12 Symbole** pro Lauf:
 | Stufe | Quelle | Session-Filter | Notes |
 |-------|--------|---------------|-------|
 | **Primary** | [EarningsWhispers](https://www.earningswhispers.com) `/api/quickcaldata/{yyyymmdd}/{rt}` | `rt=1` (BTO), `rt=3` (ATC) | Kuratierte "Most Anticipated" Liste |
-| **Fallback** | TVRemix `run_screener` | Datum-sortiert, `--min-market-cap 10B` | Füllt Lücken wenn EW < 12 |
+| **Fallback** | TVRemix `run_screener` | Datum-sortiert, `--min-market-cap 10B` | Füllt Lücken wenn EW < 12 (TVRemix ist seit 28.10. abgeschaltet → Fallback liefert meist nichts) |
 
 Die EW-Liste ist session-bewusst: BEFORE_OPEN scannt nur vor Börsenöffnung, AFTER_CLOSE nur nach Börsenschluss.
 
@@ -125,7 +126,11 @@ Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (B
 - Pro Symbol: Header (Emoji + Score + Label), 4 Kategorie-Zeilen, max **2 Headlines**
 - Chart-Zeile zeigt zusätzlich: `52W $14.97 (-33.50%)·5d 3.00%·1d -5.00%`
 - 🔴 bei SKIP-Override (EINGEPREIST, OVERBOUGHT, POST_EARNINGS_CRASH)
+- **Firmenname neben dem Ticker** (`CNC (Centene Corp)`) — Finnhub profile2
 - Ranking: Top 10 nach Score geordnet
+- **Keine Kürzung mehr:** `max_chars` ist standardmäßig aus. Hermes splittet
+  lange Reports selbst in so viele Telegram-Nachrichten wie nötig (`(1/3)`,
+  `(1/4)`, …). `--max-chars N` bleibt als optionaler Hard-Cap.
 
 ### LLM-Steuerung (keine Code-Änderungen)
 
@@ -190,16 +195,24 @@ Der Client hat `Retry-After` vorher **unbegrenzt** übernommen und schlief
 - Ohne TVRemix bleiben Forecast/Technicals/News `UNKNOWN`; Kandidaten werden
   als `INCOMPLETE` gerendert, der Report erscheint trotzdem.
 
-**Konsequenz:** Forecast/Technicals/News brauchen eine neue Quelle
-(TradingView Official MCP oder Alternative). Bis dahin ist der Monitor
-strukturell deterministisch-degradiert, nicht kaputt.
+**Konsequenz (umgesetzt 28.10.):** Default-Datenquelle ist jetzt
+**TwelveData** (OHLCV 1D/4H → EMA/RSI/ADX/MACD, 52W-Hoch, 5d/1d-Change lokal
+berechnet) + **Finnhub** (Quote, Analysten-Rating, EPS aus dem Earnings-Kalender,
+News). TVRemix bleibt optional via `--use-tvremix` (Schema unverändert).
+`stock/price-target` ist bei Finnhub Premium (403) → Kursziel-Upside fehlt,
+das kostet max. 1 Punkt in `analyst_expectation`.
+
+Der offizielle **TradingView-MCP** ist keine Alternative für den Cron: OAuth
+2.1 ohne Key, aber laut FAQ nur für „personal, interactive use" — autonome,
+geplante Requests sind ausdrücklich nicht unterstützt und Sessions können
+ohne Re-Autorisierung verfallen.
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/run_sharded.py` | **Orchestrator:** EW Discovery → Ticker-Filter → run_scan Subprocess → Merge → Render + Write. Von Cron aufgerufen. |
-| `scripts/run_scan.py` | **Worker:** Erhält Symbol-Batch, führt Pipeline aus, schreibt inkrementelle Shards. Von `run_sharded.py` als Subprozess. |
+| `scripts/run_scan.py` | **Worker:** Erhält Symbol-Batch, führt Pipeline aus, schreibt inkrementelle Shards. Von `run_sharded.py` als Subprozess. `--max-chars 0` (Default) = ungeschnitten. |
 | `scripts/llm_second.py` | Liest deterministischen Report und sendet LLM Pump-Challenger Message. |
 | `scripts/dry_run.py` | Network-free Replay aus Cached Fixtures. |
 
@@ -213,6 +226,7 @@ strukturell deterministisch-degradiert, nicht kaputt.
 --chunk-size 4                # 4 Symbole pro Chunk (3 Chunks parallel)
 --per-chunk-deadline 280      # Budget pro Chunk (gemeinsame Deadline)
 --discovery-timeout 30        # Max Sekunden für EW + Screener
+--use-tvremix                 # optional: TVRemix als Primary (Default aus)
 --total-budget 540            # Gesamtbudget; Skript endet selbst VOR dem 600s-Cron-Timeout
 --sec-user-agent "SEC User-Agent.txt"  # Optional: Insider/Dilution
 ```

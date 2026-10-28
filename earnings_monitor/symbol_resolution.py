@@ -65,4 +65,20 @@ class TvremixSymbolResolver:
         return [self.resolve(symbol) for symbol in symbols]
 
 
-__all__ = ["TvremixSymbolResolver"]
+class PlainSymbolResolver:
+    """Passthrough fuer Quellen, die bare Ticker akzeptieren (Finnhub/TwelveData).
+
+    Behaelt explizite Overrides und laesst EXCHANGE:TICKER unangetastet.
+    """
+
+    def resolve(self, symbol: str) -> str:
+        raw = str(symbol or "").strip().upper()
+        if not raw or ":" in raw:
+            return raw
+        return _SYMBOL_OVERRIDES.get(raw, raw)
+
+    def resolve_many(self, symbols):
+        return [self.resolve(symbol) for symbol in symbols]
+
+
+__all__ = ["TvremixSymbolResolver", "PlainSymbolResolver"]

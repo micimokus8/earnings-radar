@@ -31,7 +31,7 @@ from earnings_monitor.tvremix_mcp_session import TvremixMcpSession
 from earnings_monitor.tvremix_news_client import TvremixNewsClient
 from earnings_monitor.tvremix_quotes_client import TvremixQuotesClient
 from earnings_monitor.tvremix_technicals_client import TvremixTechnicalsClient
-from earnings_monitor.symbol_resolution import TvremixSymbolResolver
+from earnings_monitor.symbol_resolution import PlainSymbolResolver, TvremixSymbolResolver
 
 DEFAULT_TVREMIX_URL = "https://tvremix.xyz/api/mcp/v1"
 
@@ -205,7 +205,7 @@ class ScreenerDiscoveryClient:
 
 def build_default_pipeline(
     *,
-    tvremix_secret_path: str,
+    tvremix_secret_path: str | None = None,
     finnhub_key_path: str,
     twelvedata_key_path: str = "TwelveData Key.txt",
     sec_user_agent_path: str | None = None,
@@ -213,26 +213,39 @@ def build_default_pipeline(
     ohlcv_count: int = 300,
     timeout: float = 20.0,
     throttle_seconds: float = 0.0,
+    use_tvremix: bool = False,
 ) -> EarningsPipeline:
     try:
         finnhub_key = Path(finnhub_key_path).read_text(encoding="utf-8").strip()
     except OSError:
         finnhub_key = ""
-    # TVRemix is the primary enrichment source; free providers fill gaps.
-    session = build_tvremix_session(secret_path=tvremix_secret_path, url=url, timeout=timeout)
-    resolver = TvremixSymbolResolver(session)
-    tv_technicals = TechnicalScoreAdapter(
-        TvremixTechnicalsClient(session, ohlcv_count=ohlcv_count)
-    )
-    technicals = TechnicalPrimaryFallback(
-        tv_technicals,
-        TwelveDataTechnicalClient(
-            key_path=twelvedata_key_path, timeout=timeout, outputsize=max(ohlcv_count, 60)
-        ),
-    )
     finnhub_quotes = FinnhubQuoteClient(key=finnhub_key, timeout=timeout)
     finnhub_forecasts = FinnhubForecastClient(key=finnhub_key, timeout=timeout)
     finnhub_news = FinnhubNewsClient(key=finnhub_key, timeout=timeout)
+    twelvedata = TwelveDataTechnicalClient(
+        key_path=twelvedata_key_path, timeout=timeout, outputsize=max(ohlcv_count, 60)
+    )
+
+    if use_tvremix:
+        # Optional: TVRemix war bis 10/2026 Primary. Am 28.10. hat der Dienst
+        # per 429 + "server is being shut down" abgeschaltet -> Default aus.
+        session = build_tvremix_session(secret_path=tvremix_secret_path, url=url, timeout=timeout)
+        resolver = TvremixSymbolResolver(session)
+        technicals = TechnicalPrimaryFallback(
+            TechnicalScoreAdapter(TvremixTechnicalsClient(session, ohlcv_count=ohlcv_count)),
+            twelvedata,
+        )
+        quotes = QuotePrimaryFallback(TvremixQuotesClient(session), finnhub_quotes)
+        forecasts = ForecastPrimaryFallback(TvremixForecastClient(session, url), finnhub_forecasts)
+        news = NewsPrimaryFallback(TvremixNewsClient(session), finnhub_news)
+    else:
+        # Ohne TVRemix: TwelveData (OHLCV/Indikatoren) + Finnhub (Quotes,
+        # Analysten/EPS, News). Bare Ticker werden direkt akzeptiert.
+        resolver = PlainSymbolResolver()
+        technicals = twelvedata
+        quotes = finnhub_quotes
+        forecasts = finnhub_forecasts
+        news = finnhub_news
     short_interest = ShortInterestProvider(
         nasdaq=RetryWrapper(NasdaqShortInterestClient(timeout=timeout), retries=2, backoff=0.5),
         outstanding=RetryWrapper(FinnhubOutstandingClient(
@@ -262,10 +275,10 @@ def build_default_pipeline(
 
     return EarningsPipeline(
         calendar=StaticCalendarClient(),
-        quotes=QuotePrimaryFallback(TvremixQuotesClient(session), finnhub_quotes),
-        forecasts=ForecastPrimaryFallback(TvremixForecastClient(session, url), finnhub_forecasts),
+        quotes=quotes,
+        forecasts=forecasts,
         technicals=technicals,
-        news=NewsPrimaryFallback(TvremixNewsClient(session), finnhub_news),
+        news=news,
         short_interest=short_interest,
         insider=insider,
         dilution=dilution,
