@@ -99,7 +99,11 @@ def interpret_candidates(
     payload = {
         "model": model,
         "temperature": 0.4,
-        "max_tokens": 1600,
+        # Reasoning-Modelle (z.B. z-ai/glm-5.3-flash) verbrauchen das Budget
+        # zuerst fuer "reasoning" und liefern dann content=null. Bei 1600
+        # Tokens kam am 28.10. nur Denken, keine Antwort. 6000 deckt Denken
+        # (~1.5-3k) plus die eigentliche Analyse ab; Kosten bleiben < 0,001 $.
+        "max_tokens": 6000,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(candidates)},
@@ -114,31 +118,55 @@ def interpret_candidates(
             timeout=timeout,
             payload=payload,
         )
-        raw = response["choices"][0]["message"]["content"].strip()
+        message = response["choices"][0].get("message") or {}
+        # content kann bei Reasoning-Modellen null sein -> kein AttributeError,
+        # sondern der klare finish_reason-Pfad unten.
+        raw = (message.get("content") or "").strip()
     except Exception as exc:
         error = repr(exc)
         raw = ""
     if not raw:
-        finish = (response or {}).get("choices", [{}])[0].get("finish_reason")
+        choice = (response or {}).get("choices", [{}])[0] or {}
+        finish = choice.get("finish_reason")
+        usage = (response or {}).get("usage") or {}
+        reasoning_tokens = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         return {
             "deutung": {},
             "empfehlung": "",
-            "error": error or f"leere Antwort (finish_reason={finish}; moegliche Ursache: Reasoning-Modell braucht mehr max_tokens)",
+            "error": error or (
+                f"leere Antwort (finish_reason={finish}, reasoning_tokens={reasoning_tokens}; "
+                f"Reasoning-Modell braucht mehr max_tokens)"),
         }
 
+    def _clean(text: str) -> str:
+        # Markdown-Fettung/Sterne entfernen, damit **DEUTUNG:** auch greift.
+        return text.replace("**", "").replace("__", "").strip()
+
     deutung = {}
-    empfehlung = ""
-    lines = raw.splitlines()
-    for line in lines:
-        stripped = line.strip()
-        if str(stripped).upper().startswith(_DEUTUNG_MARKER):
+    empfehlung_parts: list[str] = []
+    in_empfehlung = False
+    for line in raw.splitlines():
+        stripped = _clean(line)
+        upper = stripped.upper()
+        if upper.startswith(_DEUTUNG_MARKER):
+            in_empfehlung = False
             rest = stripped[len(_DEUTUNG_MARKER):].strip()
             if " " in rest:
                 symbol, text = rest.split(" ", 1)
                 deutung[symbol.lstrip('*:-"').strip()] = text.strip()
             continue
-        if stripped.startswith(_EMPFEHLUNG_MARKER):
-            empfehlung = stripped[len(_EMPFEHLUNG_MARKER):].strip()
+        if upper.startswith(_EMPFEHLUNG_MARKER):
+            # Marker steht oft allein in der Zeile; der Inhalt folgt
+            # darunter (mehrzeilig, nummeriert). Vorher wurde nur der Rest
+            # derselben Zeile genommen -> Empfehlung war immer leer.
+            in_empfehlung = True
+            rest = stripped[len(_EMPFEHLUNG_MARKER):].strip()
+            if rest:
+                empfehlung_parts.append(rest)
+            continue
+        if in_empfehlung and stripped:
+            empfehlung_parts.append(stripped)
+    empfehlung = "\n".join(empfehlung_parts).strip()
     return {"deutung": deutung, "empfehlung": empfehlung}
 
 

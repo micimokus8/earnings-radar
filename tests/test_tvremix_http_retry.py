@@ -1,5 +1,9 @@
+import time
 import unittest
+import urllib.error
+from email.message import Message
 
+import earnings_monitor.tvremix_http as tvhttp
 from earnings_monitor.tvremix_http import request_json
 
 
@@ -63,6 +67,57 @@ class RequestJsonRetryTests(unittest.TestCase):
                 opener=opener, retries=3, backoff_seconds=0.0,
             )
         self.assertEqual(opener.calls, 1)
+
+
+class _LongRetryAfterOpener:
+    """Simuliert TVRemix-Shutdown: 429 mit Retry-After in Stunden."""
+
+    def __init__(self, retry_after: str = "27667"):
+        self.calls = 0
+        self.retry_after = retry_after
+
+    def __call__(self, request, timeout=20):
+        self.calls += 1
+        headers = Message()
+        headers["Retry-After"] = self.retry_after
+        raise urllib.error.HTTPError(
+            request.full_url, 429, "rate limited", headers, None)
+
+
+class LongRetryAfterTests(unittest.TestCase):
+    def setUp(self):
+        tvhttp._reset_circuit_breaker()
+
+    def tearDown(self):
+        tvhttp._reset_circuit_breaker()
+
+    def test_fails_fast_instead_of_sleeping_hours(self):
+        opener = _LongRetryAfterOpener()
+        start = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, "rate_limited_long"):
+            request_json("https://x", {}, 5, {"a": 1},
+                         opener=opener, backoff_seconds=0.0)
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 1.0, f"haette {elapsed:.1f}s geschlafen")
+        self.assertEqual(opener.calls, 1)
+
+    def test_circuit_breaker_blocks_followup_calls(self):
+        opener = _LongRetryAfterOpener()
+        with self.assertRaises(RuntimeError):
+            request_json("https://x", {}, 5, {"a": 1},
+                         opener=opener, backoff_seconds=0.0)
+        with self.assertRaisesRegex(RuntimeError, "circuit_open"):
+            request_json("https://x", {}, 5, {"a": 1},
+                         opener=opener, backoff_seconds=0.0)
+        # Kein zweiter Netzwerkversuch gegen einen toten Endpoint.
+        self.assertEqual(opener.calls, 1)
+
+    def test_short_retry_after_still_retries(self):
+        opener = _LongRetryAfterOpener(retry_after="1")
+        with self.assertRaises(RuntimeError):
+            request_json("https://x", {}, 5, {"a": 1}, opener=opener,
+                         retries=1, backoff_seconds=0.0, max_retry_after=120)
+        self.assertEqual(opener.calls, 2)
 
 
 if __name__ == "__main__":

@@ -89,6 +89,42 @@ class InterpretationTests(unittest.TestCase):
         )
         self.assertEqual(out, {"deutung": {}, "empfehlung": ""})
 
+    def test_multiline_empfehlung_with_markdown(self):
+        # GLM-5.3-flash liefert "**EMPFEHLUNG:**" allein in der Zeile und die
+        # Liste darunter. Vorher blieb die Empfehlung deshalb leer.
+        bot = ("**DEUTUNG:** NASDAQ:ZM — schwach, aber RSI tief.\n\n"
+               "**EMPFEHLUNG:**\n"
+               "1. NASDAQ:ZM — Test\n"
+               "2. OTHER — Test2\n")
+        out = interpret_candidates(
+            _candidates(), api_key="k", base_url="https://x", model="m",
+            requester=_FakeRequester(bot).post_json,
+        )
+        self.assertEqual(out["deutung"].get("NASDAQ:ZM"), "— schwach, aber RSI tief.")
+        self.assertIn("1. NASDAQ:ZM", out["empfehlung"])
+        self.assertIn("2. OTHER", out["empfehlung"])
+
+    def test_reasoning_model_with_null_content_reports_tokens(self):
+        # Reasoning-Modell: content=None, finish_reason=length, Tokens im
+        # Denken verbraucht. Der Fehler muss das sichtbar machen.
+        class _ReasoningRequester:
+            def post_json(self, url, *, headers, timeout, payload):
+                return {
+                    "choices": [{
+                        "finish_reason": "length",
+                        "message": {"content": None, "reasoning": "denkt nach"},
+                    }],
+                    "usage": {"completion_tokens_details": {"reasoning_tokens": 1500}},
+                }
+
+        out = interpret_candidates(
+            _candidates(), api_key="k", base_url="https://x", model="m",
+            requester=_ReasoningRequester().post_json,
+        )
+        self.assertEqual(out.get("deutung"), {})
+        self.assertEqual(out.get("empfehlung"), "")
+        self.assertIn("reasoning_tokens=1500", out.get("error", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

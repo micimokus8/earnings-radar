@@ -10,7 +10,7 @@ Deterministic earnings scan for US equities mit 4-Kategorie Scoring, Telegram-De
 
 ```
 EarningsWhispers API──┐
-                      ├── max 12 symbols ──▶ run_sharded.py ──▶ run_scan.py (1 chunk, alle parallel)
+                      ├── max 12 symbols ──▶ run_sharded.py ──▶ run_scan.py (3 Chunks à 4, parallel)
 TVRemix Screener ($10B fallback) ──┘           │                    │
                                                 │                    ├── SI (first)
                                                 │                    ├── forecast
@@ -35,7 +35,7 @@ Die EW-Liste ist session-bewusst: BEFORE_OPEN scannt nur vor Börsenöffnung, AF
 
 ### Pipeline
 
-`EarningsPipeline` (`pipeline.py`) verarbeitet Symbole **sequentiell innerhalb eines Chunks**. Einziger Chunk mit `--chunk-size 12` (Parallelisierung über Subprozesse). Pro Symbol 90s Timeout, gesamter Chunk 540s Deadline.
+`EarningsPipeline` (`pipeline.py`) verarbeitet Symbole **sequentiell innerhalb eines Chunks**. `run_sharded.py` startet 3 Chunks à 4 Symbole **parallel** (Subprozesse, 8s Stagger gegen 429). Pro Symbol 90s Timeout, pro Chunk 280s Deadline; alle Chunks teilen sich **eine absolute Deadline**.
 
 **Source Order** (SI first — höchster Wert, fragilste Quelle):
 
@@ -132,7 +132,7 @@ Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (B
 | File | Content | Effect |
 |------|---------|--------|
 | `LLM Enabled.txt` | `ON` / `OFF` | LLM Interpretation aktiv/deaktiv |
-| `LLM Model.txt` | Model-Slug (z.B. `openai/gpt-4o-mini`) | Model zur Laufzeit wechseln |
+| `LLM Model.txt` | Model-Slug (z.B. `z-ai/glm-5.3-flash`) | Model zur Laufzeit wechseln |
 | `LLM Key.txt` | OpenRouter Key `sk-or-…` | Auth; fehlt → nur deterministisch |
 
 ### LLM Pump-Challenger (P5)
@@ -146,7 +146,45 @@ Abschluss: Top-3-Ranking nach Pump-Potential (nicht nach Score).
 
 Der LLM **ändert nie Scores oder Labels** — er liefert eine zweite, unabhängige Perspektive.
 
+**Wo er läuft:** seit 28.10. im **Orchestrator** (`run_sharded.py`,
+`_interpret_merged`) — **ein** Call auf dem gemergten Report. Vorher rief
+`run_sharded.py` den Worker ohne `--interpret` auf, und selbst mit Flag ginge
+die LLM-Ausgabe der Chunk-Subprozesse ins `DEVNULL`: die Interpretation wurde
+verworfen. `--no-llm` deaktiviert sie für einen Lauf.
+
+**Reasoning-Modelle:** `z-ai/glm-5.3-flash` denkt zuerst (`reasoning`) und liefert
+danach `content`. Mit `max_tokens=1600` war das Budget am 28.10. komplett vom
+Denken verbraucht → `content=null`, keine Interpretation. Deshalb:
+`max_tokens=6000` (Denken + Antwort), `content` wird null-sicher gelesen, und
+der Fehlerpfad nennt `finish_reason` + `reasoning_tokens`. `reasoning` lässt
+sich bei diesem Modell nicht per API abschalten (HTTP 400).
+
 ---
+
+### Upstream-Limitierung: TVRemix (28.10.2026)
+
+TVRemix antwortet inzwischen mit **HTTP 429** und einem Hinweis auf die
+Abschaltung:
+
+```json
+{"error": "Rate limit exceeded. Retry after 27667s. The TradingView Remix MCP
+ server is being shut down and is limited to 50 tool calls per day; use
+ TradingView's official MCP server instead"}
+```
+
+Der Client hat `Retry-After` vorher **unbegrenzt** übernommen und schlief
+7,7 Stunden → Cron-Timeout ohne Report. Jetzt:
+
+- `Retry-After` wird auf `max_backoff` (8s) gekappt.
+- Werte über `max_retry_after` (120s) lösen sofort
+  `tvremix_rate_limited_long(...)` aus und öffnen einen **Circuit Breaker**
+  für den restlichen Prozess — kein weiterer Netzwerkversuch.
+- Ohne TVRemix bleiben Forecast/Technicals/News `UNKNOWN`; Kandidaten werden
+  als `INCOMPLETE` gerendert, der Report erscheint trotzdem.
+
+**Konsequenz:** Forecast/Technicals/News brauchen eine neue Quelle
+(TradingView Official MCP oder Alternative). Bis dahin ist der Monitor
+strukturell deterministisch-degradiert, nicht kaputt.
 
 ## Scripts
 
@@ -164,21 +202,30 @@ Der LLM **ändert nie Scores oder Labels** — er liefert eine zweite, unabhäng
 --max-symbols 12              # Hard Cap
 --min-market-cap 10000000000  # Screener-Floor
 --exclude-prefixes "OTC:"     # Ausgeschlossene Exchanges
---chunk-size 12               # Ein Chunk (alle Symbole parallel)
---per-chunk-deadline 540      # Budget pro Chunk
+--chunk-size 4                # 4 Symbole pro Chunk (3 Chunks parallel)
+--per-chunk-deadline 280      # Budget pro Chunk (gemeinsame Deadline)
 --discovery-timeout 30        # Max Sekunden für EW + Screener
+--total-budget 540            # Gesamtbudget; Skript endet selbst VOR dem 600s-Cron-Timeout
 --sec-user-agent "SEC User-Agent.txt"  # Optional: Insider/Dilution
 ```
 
 ### Timing Budget
 
 ```
-Discovery (EW + Fallback):    30s
-1 chunk × 12 Symbole × 90s:  540s (deadline)
-Rescue (parallel):             90s
+Discovery (EW + Fallback):     30s
+Spawn-Stagger (3 Chunks):      16s
+Chunks (parallel, 1 Deadline): 280s
+Rescue (parallel, 1 Deadline):  90s
 ──────────────────────────────────
-Total max:                   660s  → vom 600s Cron-Timeout abgefangen
+Total max:                    416s
+Harte Selbstgrenze:           540s (--total-budget) < 600s Cron-Timeout
 ```
+
+Wichtig: `_wait_all()` benutzt **eine absolute Deadline** für alle Prozesse.
+Vorher bekam jeder Prozess die volle Deadline ab seinem Wartezeitpunkt —
+3 × 280s = 840s und damit garantiert über dem 600s-Timeout (28.10., kein
+Report). Die Rettung wird übersprungen, wenn weniger als 25s Budget übrig
+sind, statt den Lauf zu sprengen.
 
 ---
 

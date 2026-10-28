@@ -8,9 +8,20 @@ import urllib.error
 import urllib.request
 
 
+# Circuit breaker: nach einem langen Retry-After (Server-Shutdown, Tageslimit)
+# wird der Endpoint fuer den Rest des Prozesses nicht mehr angerufen.
+_BLOCKED_UNTIL = 0.0
+
+
+def _reset_circuit_breaker() -> None:
+    global _BLOCKED_UNTIL
+    _BLOCKED_UNTIL = 0.0
+
+
 def request_json(url, headers, timeout, payload, *, opener=urllib.request.urlopen,
                  retries: int = 3, backoff_seconds: float = 0.5,
                  max_backoff: float = 8.0,
+                 max_retry_after: float = 120.0,
                  sleep=time.sleep):
     """POST JSON with calm, 429-aware retry/backoff for the TVRemix MCP.
 
@@ -25,6 +36,10 @@ def request_json(url, headers, timeout, payload, *, opener=urllib.request.urlope
         headers={**headers, "Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
         method="POST",
     )
+    global _BLOCKED_UNTIL
+    if time.monotonic() < _BLOCKED_UNTIL:
+        raise RuntimeError("tvremix_rate_limited_circuit_open")
+
     last_error = None
     status = None
     raw = b""
@@ -44,11 +59,17 @@ def request_json(url, headers, timeout, payload, *, opener=urllib.request.urlope
             status = None
         if status is not None and status in _TRANSIENT:
             last_error = RuntimeError(f"tvremix_http_{status}")
+            retry_after = _retry_after(response_headers)
+            # TVRemix liefert bei Shutdown/Tageslimit Retry-After in Stunden
+            # (28.10.: 27667s). Ungebremst schlief der Prozess 7,7 Stunden und
+            # der Cron-Timeout killte den ganzen Lauf ohne Report.
+            if retry_after is not None and retry_after > max_retry_after:
+                _BLOCKED_UNTIL = time.monotonic() + retry_after
+                raise RuntimeError(f"tvremix_rate_limited_long({int(retry_after)}s)")
             if attempt < retries:
-                retry_after = _retry_after(response_headers)
                 delay = retry_after if retry_after is not None \
                     else min(max_backoff, backoff_seconds * (2 ** attempt))
-                sleep(delay)
+                sleep(min(delay, max_backoff))
                 continue
             raise last_error
         if status is None:

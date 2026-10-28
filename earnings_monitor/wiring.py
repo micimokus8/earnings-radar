@@ -246,9 +246,19 @@ def build_default_pipeline(
     user_agent = load_optional_text(sec_user_agent_path) if sec_user_agent_path else None
     insider = dilution = None
     if user_agent:
-        sec_client = SecHttpClient(user_agent=user_agent, timeout=timeout)
-        insider = make_insider_lookup(sec_client)
-        dilution = make_dilution_lookup(sec_client)
+        # SEC insider/dilution is an OPTIONAL enrichment source. The eager
+        # ticker-map download (company_tickers.json) is frequently rate-limited
+        # / blocked (403) by SEC. If it fails, degrade gracefully and run the
+        # scan WITHOUT insider/dilution rather than crash the whole job.
+        try:
+            sec_client = SecHttpClient(user_agent=user_agent, timeout=timeout)
+            insider = make_insider_lookup(sec_client)
+            dilution = make_dilution_lookup(sec_client)
+        except Exception as exc:  # noqa: BLE001 - SEC must never kill the scan
+            import sys as _sys
+            print(f"[SEC] Insider/Dilution deaktiviert ({type(exc).__name__}: {exc}) — "
+                  f"Scan läuft ohne SEC-Checks weiter.", file=_sys.stderr)
+            insider = dilution = None
 
     return EarningsPipeline(
         calendar=StaticCalendarClient(),

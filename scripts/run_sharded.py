@@ -26,6 +26,7 @@ from pathlib import Path
 from earnings_monitor.dedup import dedupe_dual_class_symbols
 from earnings_monitor.report_builder import merge_reports
 from earnings_monitor.telegram_report import render_report
+from earnings_monitor.llm_interpretation import interpret_candidates
 
 SPAWN_STAGGER = 8.0  # seconds between launching each parallel chunk
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -39,6 +40,41 @@ def _run(args, extra, *, capture=True, timeout=None):
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     # Forward subprocess stderr to parent stderr so we can see crash traces
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, env=env)
+
+
+def _read_optional(path: str, default: str = "") -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8").strip() or default
+    except OSError:
+        return default
+
+
+_LLM_OFF = {"OFF", "NO", "AUS", "0", "FALSE"}
+
+
+def _interpret_merged(merged, *, enabled: str, api_key: str, model: str,
+                      base_url: str, interpreter=interpret_candidates):
+    """LLM-Interpretation auf dem gemergten Report.
+
+    Returns (deutung, empfehlung, note). Ein Call pro Report, nie pro Chunk:
+    die Chunk-Subprozesse schreiben nach DEVNULL, ihre LLM-Ausgabe ginge
+    verloren. Genau das war der Zustand bis 28.10.
+    """
+    if enabled.strip().upper() in _LLM_OFF:
+        return {}, "", "LLM deaktiviert (LLM Enabled.txt = OFF)"
+    if not api_key:
+        return {}, "", "LLM aus - kein Key"
+    labelled = [c for c in merged.get("candidates", [])
+                if (c.get("score") or {}).get("label")]
+    if not labelled:
+        return {}, "", "LLM uebersprungen - keine bewertbaren Kandidaten"
+    result = interpreter(labelled[:5], api_key=api_key, base_url=base_url,
+                         model=model)
+    deutung = result.get("deutung", {})
+    empfehlung = result.get("empfehlung", "")
+    if not deutung and not empfehlung:
+        return {}, "", f"LLM fehlgeschlagen: {result.get('error', 'leer')}"
+    return deutung, empfehlung, f"LLM ok ({model}, {len(deutung)} Symbole)"
 
 
 def _is_valid_ticker(symbol: str) -> bool:
@@ -84,11 +120,22 @@ def _chunks(seq, size):
 
 
 def _wait_all(procs, deadline: float):
-    """Wait for all processes. Each gets up to ``deadline`` wall-clock seconds
-    starting from NOW. Processes already finished return instantly."""
+    """Wait for all processes against ONE shared absolute deadline.
+
+    Vorher bekam jeder Prozess die volle Deadline ab dem Moment, in dem er
+    an die Reihe kam: 3 Chunks x 280s = 840s und damit zuverlaessig ueber dem
+    600s-Cron-Timeout (28.10.). Jetzt laeuft die Uhr einmal und alle teilen
+    sich das Budget.
+    """
+    end = time.monotonic() + max(0.1, deadline)
     for p in procs:
+        remaining = end - time.monotonic()
+        # Nach Ablauf der gemeinsamen Deadline nicht mehr 0.1s pro Prozess
+        # nachwarten — sonst waechst die Gesamtzeit wieder mit der Anzahl.
+        if remaining <= 0 or p.poll() is not None:
+            continue
         try:
-            p.wait(timeout=max(1.0, deadline))
+            p.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             p.kill()
     # Guarantee termination
@@ -99,6 +146,16 @@ def _wait_all(procs, deadline: float):
                 p.wait(timeout=6)
             except subprocess.TimeoutExpired:
                 pass
+
+
+def _effective_chunk_deadline(per_chunk: float, budget_end: float,
+                              now: float, reserve: float = 100.0) -> float:
+    """Chunk-Deadline, gedeckelt durch das verbleibende Gesamtbudget.
+
+    Reserve = 90s Rescue + 10s Merge/Render. Floor 60s, damit ein spaeter
+    Start nicht in einen sinnlosen 5-Sekunden-Scan laeuft.
+    """
+    return min(float(per_chunk), max(60.0, budget_end - now - reserve))
 
 
 def _load_shards(shard_paths: list[Path]) -> list[dict]:
@@ -134,11 +191,20 @@ def main() -> int:
                         help="Wall-clock budget per chunk in seconds")
     parser.add_argument("--discovery-timeout", type=float, default=120.0,
                         help="Timeout in seconds for the single discovery call")
+    parser.add_argument("--total-budget", type=float, default=540.0,
+                        help="Gesamtbudget in Sekunden; muss unter dem Cron-Timeout "
+                             "(600s) bleiben, damit das Skript selbst sauber endet")
     parser.add_argument("--tvremix-secret", default="tvremix API.txt")
     parser.add_argument("--finnhub-key", default="Finhub Key.txt")
     parser.add_argument("--sec-user-agent", default="SEC User-Agent.txt",
                         help="File with SEC User-Agent string for insider/dilution lookups")
     parser.add_argument("--out-dir", default="data/reports")
+    parser.add_argument("--llm-enabled-file", default="LLM Enabled.txt")
+    parser.add_argument("--llm-key", default="LLM Key.txt")
+    parser.add_argument("--llm-model-file", default="LLM Model.txt")
+    parser.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="LLM-Interpretation fuer diesen Lauf deaktivieren")
     args = parser.parse_args()
 
     # ── discovery (bounded by separate timeout, not shrinking) ──────────
@@ -149,7 +215,11 @@ def main() -> int:
         sys.stderr.write(f"[scan] keine Symbole für {args.report_type} gefunden.\n")
         return 0
 
-    chunk_deadline = args.per_chunk_deadline
+    budget_end = t_start + args.total_budget
+    rescue_reserve = 100.0  # 90s Rescue + Reserve fuer Merge/Render
+    chunk_deadline = _effective_chunk_deadline(
+        args.per_chunk_deadline, budget_end, time.monotonic(), rescue_reserve,
+    )
 
     # Dedupe once so dual-class pairs are never split across chunks
     symbols = dedupe_dual_class_symbols(symbols)
@@ -207,26 +277,36 @@ def main() -> int:
         merged["quality"]["truncated"] = True
         sys.stderr.write(f"[verlust] {len(lost)} Symbol(e) fehlen: {', '.join(lost)}\n")
 
-        # Parallel rescue: all lost symbols in one batch, each gets 120s
-        rescue_timeout = 90.0
-        sys.stderr.write(f"[rescue] starte {len(lost)} parallele Rettungen, je {rescue_timeout:.0f}s\n")
+        # Parallel rescue: alle verlorenen Symbole in EINEM Batch.
+        # Budget wird aus dem Gesamtbudget abgeleitet, damit die Rettung den
+        # Cron-Timeout nicht sprengt (vorher: 90s pro Symbol nacheinander).
+        remaining = budget_end - time.monotonic()
+        rescue_timeout = min(90.0, remaining - 15.0)
         rescue_procs: list[subprocess.Popen] = []
         rescue_paths: list[Path] = []
-        for sym in lost:
-            rescue_path = work / f"rescue_{sym.replace(':', '_')}.json"
-            rescue_paths.append(rescue_path)
-            rescue_procs.append(_run(args, [
-                "--symbols", sym,
-                "--report-type", args.report_type,
-                "--as-of", args.as_of or "",
-                "--out-file", str(rescue_path),
-                "--deadline-seconds", str(rescue_timeout),
-                "--tvremix-secret", args.tvremix_secret,
-                "--finnhub-key", args.finnhub_key,
-                "--sec-user-agent", args.sec_user_agent,
-            ], capture=False))
 
-        _wait_all(rescue_procs, deadline=rescue_timeout)
+        if rescue_timeout < 25.0:
+            sys.stderr.write(
+                f"[rescue] uebersprungen - nur {max(0.0, remaining):.0f}s Budget uebrig "
+                f"({len(lost)} Symbol(e) fehlen)\n")
+        else:
+            sys.stderr.write(
+                f"[rescue] starte {len(lost)} parallele Rettungen, je {rescue_timeout:.0f}s\n")
+            for sym in lost:
+                rescue_path = work / f"rescue_{sym.replace(':', '_')}.json"
+                rescue_paths.append(rescue_path)
+                rescue_procs.append(_run(args, [
+                    "--symbols", sym,
+                    "--report-type", args.report_type,
+                    "--as-of", args.as_of or "",
+                    "--out-file", str(rescue_path),
+                    "--deadline-seconds", str(rescue_timeout),
+                    "--tvremix-secret", args.tvremix_secret,
+                    "--finnhub-key", args.finnhub_key,
+                    "--sec-user-agent", args.sec_user_agent,
+                ], capture=False))
+            _wait_all(rescue_procs, deadline=rescue_timeout)
+
         rescue_reports = _load_shards(rescue_paths)
         rescued_count = len(rescue_reports)
         sys.stderr.write(f"[rescue] {rescued_count}/{len(lost)} gerettet\n")
@@ -259,7 +339,23 @@ def main() -> int:
     out_path = out_dir / f"{safe_id}.json"
     out_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
 
-    print(render_report(merged))
+    # ── LLM-Interpretation: EIN Call auf dem gemergten Report ───────────
+    # Vorher lief sie in run_scan.py pro Chunk — und deren stdout geht ins
+    # DEVNULL, d.h. die Interpretation wurde verworfen. Ausserdem wurde
+    # --interpret vom Orchestrator nie gesetzt. Ergebnis: LLM faktisch aus.
+    deutung, empfehlung, llm_note = {}, "", ""
+    if not args.no_llm:
+        deutung, empfehlung, llm_note = _interpret_merged(
+            merged,
+            enabled=_read_optional(args.llm_enabled_file, "ON"),
+            api_key=_read_optional(args.llm_key, ""),
+            model=_read_optional(args.llm_model_file, "openai/gpt-4o-mini"),
+            base_url=args.llm_base_url,
+        )
+    if llm_note:
+        sys.stderr.write(f"[llm] {llm_note}\n")
+
+    print(render_report(merged, deutung=deutung, empfehlung=empfehlung))
 
     sys.stderr.write(f"\n[artifact] {out_path}\n")
     sys.stderr.write(
@@ -268,7 +364,9 @@ def main() -> int:
         f"truncated={quality.get('truncated', False)} "
         f"shards={len(reports)}/{len(shard_paths)}\n"
     )
-    sys.stderr.write(f"[timing] total {total_elapsed:.0f}s (discovery {discover_elapsed:.0f}s)\n")
+    sys.stderr.write(
+        f"[timing] total {total_elapsed:.0f}s (budget {args.total_budget:.0f}s, "
+        f"discovery {discover_elapsed:.0f}s, chunks {chunk_elapsed - discover_elapsed:.0f}s)\n")
     return 0
 
 

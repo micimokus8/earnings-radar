@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -58,19 +59,35 @@ def _discover(args) -> list[str]:
         sys.stderr.write(f"[discover] EW: {len(result)} Symbole\n")
 
     # 2. Fill remaining slots from TVRemix screener (fallback, $10B+ market cap)
+    #    The fallback is OPTIONAL and time-boxed: it must never block the scan
+    #    (TVRemix can hang / rate-limit). EW results always proceed.
     if len(result) < max_sym:
-        from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
-        exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
-        try:
-            discovery = ScreenerDiscoveryClient(
-                build_tvremix_session(secret_path=args.tvremix_secret),
-                exclude_prefixes=exclude,
-                min_market_cap=args.min_market_cap,
-            )
-            extra = discovery.get(target_date_str)
-        except Exception as exc:
-            # TVRemix is optional discovery only. Never discard EW results.
-            sys.stderr.write(f"[discover] TVRemix fallback unavailable: {type(exc).__name__}\n")
+        def _fallback():
+            from earnings_monitor.wiring import ScreenerDiscoveryClient, build_tvremix_session
+            exclude = tuple(p.strip() for p in args.exclude_prefixes.split(",") if p.strip())
+            try:
+                discovery = ScreenerDiscoveryClient(
+                    build_tvremix_session(secret_path=args.tvremix_secret),
+                    exclude_prefixes=exclude,
+                    min_market_cap=args.min_market_cap,
+                )
+                return discovery.get(target_date_str)
+            except Exception as exc:
+                # TVRemix is optional discovery only. Never discard EW results.
+                sys.stderr.write(f"[discover] TVRemix fallback unavailable: {type(exc).__name__}\n")
+                return []
+
+        import threading
+        _box = {}
+        def _runner():
+            _box["extra"] = _fallback()
+        _t = threading.Thread(target=_runner, daemon=True)
+        _t.start()
+        _t.join(timeout=12.0)  # hard cap: never block the scan on a fallback
+        extra = _box.get("extra", [])
+        if _t.is_alive():
+            # Fallback still running past budget — proceed without it.
+            sys.stderr.write("[discover] TVRemix fallback ueberschritt Budget - uebersprungen\n")
             extra = []
         existing = set(result)
         for sym in extra:
@@ -153,6 +170,19 @@ def main() -> int:
         if args.deadline_seconds and args.deadline_seconds > 0 else None
     )
 
+    # ── Harter Watchdog pro Chunk ───────────────────────────────────────
+    # Die Pipeline prueft ihre Deadline nur ZWISCHEN den Quellen. Ein
+    # haengender TVRemix-Call (3 x 20s Retry) kann ein Symbol weit ueber
+    # 90s ziehen -> der Chunk reisst sein Budget und der Shard fehlt.
+    # Nach deadline + 75s (LLM-Timeout 60s + Reserve) beendet sich der
+    # Prozess hart. Der Shard ist durch die inkrementellen Writes bereits
+    # auf Platte, run_sharded.py rettet die fehlenden Symbole.
+    if deadline is not None:
+        hard_limit = float(args.deadline_seconds) + 75.0
+        watchdog = threading.Timer(hard_limit, lambda: os._exit(1))
+        watchdog.daemon = True
+        watchdog.start()
+
     pipeline = build_default_pipeline(
         tvremix_secret_path=args.tvremix_secret,
         finnhub_key_path=args.finnhub_key,
@@ -186,37 +216,47 @@ def main() -> int:
 
     # Run pipeline directly (not via run_report) so we can write after each
     # symbol instead of once at the end — a kill mid-run leaves a usable shard.
-    result = pipeline.run(
-        symbols,
-        as_of=as_of,
-        deadline=deadline,
-        on_candidate=None,
-    )
-    candidates_raw = result.get("candidates", [])
-    removed = result.get("removed_duplicate_symbols", [])
-
-    # Write incremental shards: after each candidate built, write the report
-    # so far so a kill between symbols never loses already-completed work.
-    report = build_report(
+    state = {"report": build_report(
         report_type=args.report_type,
         report_date=report_date,
         as_of=as_of,
         candidates=[],
-        removed_duplicate_symbols=removed,
+        removed_duplicate_symbols=[],
         truncated=False,
-    )
-    _atomic_write(report, out_path)
-    for candidate in candidates_raw:
-        prev = report
-        report = build_report(
+    )}
+    state["removed"] = []
+
+    def _on_candidate(candidate, index, total):
+        state["report"] = build_report(
             report_type=args.report_type,
             report_date=report_date,
             as_of=as_of,
-            candidates=prev["candidates"] + [candidate],
-            removed_duplicate_symbols=removed,
-            truncated=result.get("truncated", False),
+            candidates=state["report"]["candidates"] + [candidate],
+            removed_duplicate_symbols=state["removed"],
+            truncated=True,  # partial until the loop finishes
         )
-        _atomic_write(report, out_path)
+        _atomic_write(state["report"], out_path)
+
+    _atomic_write(state["report"], out_path)
+    result = pipeline.run(
+        symbols,
+        as_of=as_of,
+        deadline=deadline,
+        on_candidate=_on_candidate,
+    )
+    candidates_raw = result.get("candidates", [])
+    state["removed"] = result.get("removed_duplicate_symbols", [])
+
+    # Final overwrite with the complete candidate set + true truncation status.
+    report = build_report(
+        report_type=args.report_type,
+        report_date=report_date,
+        as_of=as_of,
+        candidates=candidates_raw,
+        removed_duplicate_symbols=state["removed"],
+        truncated=result.get("truncated", False),
+    )
+    _atomic_write(report, out_path)
 
     # ---- optional LLM interpretation
     deutung = {}

@@ -1,1 +1,1 @@
-openai/gpt-4o-mini
+z-ai/glm-5.3-flash

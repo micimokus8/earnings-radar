@@ -3,9 +3,12 @@
 set -u
 cd /root/.hermes/workspace/earnings-monitor || exit 1
 export PYTHONPATH=.
-exec python3 scripts/run_scan.py \
-  --auto-discover \
+exec python3 scripts/run_sharded.py \
   --report-type AFTER_CLOSE \
-  --max-symbols 24 \
-  --min-market-cap 2000000000 \
-  --exclude-prefixes "OTC:"
+  --max-symbols 12 \
+  --min-market-cap 10000000000 \
+  --exclude-prefixes "OTC:" \
+  --chunk-size 4 \
+  --per-chunk-deadline 280 \
+  --discovery-timeout 30 \
+  --total-budget 540
