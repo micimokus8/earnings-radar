@@ -92,14 +92,28 @@ Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (B
 | **OVERBOUGHT** | `RSI_1d > 75` | 🔴 SKIP — überkauft |
 | **POST_EARNINGS_CRASH** | `daily_change_pct ≤ -10%` | 🔴 SKIP — LULU-Fall |
 
-### Labels
+### Labels — auf erreichbare Punkte normalisiert
 
-| Punkte | Label | Bedeutung |
+Eine Kategorie mit **state N/A** ist für das Symbol strukturell nicht messbar
+(Short Interest: nur Nasdaq-Listings; Analysten: kein Coverage). Diese Punkte
+zählen nicht gegen den Kandidaten — der Nenner schrumpft mit:
+
+`reachable_points = 14 − Summe(max_points aller N/A-Kategorien)`
+`score_pct = total_points / reachable_points × 100`
+
+Unsere eigenen Datenlücken (SEC offline, Kursziel 403, fehlende Kerzen) bleiben
+dagegen als fehlende Punkte stehen — ein blinder Prüfer darf das Urteil nicht
+aufwerten. Im Report steht deshalb z. B. `9/11 (82 %)` statt `9/14`.
+
+| Anteil | Label | Bedeutung |
 |--------|-------|-----------|
-| ≥ 10 | **STRONG_SETUP** 🟢🟢 | Earnings-Pump-Kandidat |
-| 6–9 | **WATCH** 🟢 | Potenzial, Review nötig |
-| < 6 oder SKIP-Override | **SKIP** ⚪/🔴 | Schwach oder Risiko |
+| ≥ 71,4 % (≙ 10/14) | **STRONG_SETUP** 🟢🟢 | Earnings-Pump-Kandidat |
+| ≥ 42,9 % (≙ 6/14) | **WATCH** 🟢 | Potenzial, Review nötig |
+| darunter oder SKIP-Override | **SKIP** ⚪/🔴 | Schwach oder Risiko |
 | — | None | Core-Felder fehlen (INCOMPLETE) |
+
+Das Ranking sortiert nach `score_pct`, nicht nach Rohpunkten — sonst lägen
+NYSE-Werte systematisch 3 Punkte hinter Nasdaq-Werten.
 
 ### Was der neue Score für AOUT/BBCP bedeutet
 

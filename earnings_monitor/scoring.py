@@ -13,6 +13,21 @@ def _category(points, max_points, unknown=None):
     }
 
 
+STRONG_PCT = 71.4   # entspricht dem alten 10/14
+WATCH_PCT = 42.9    # entspricht dem alten 6/14
+
+
+def label_for(pct: float, skip_reason: str | None) -> str:
+    """Label aus dem Prozentwert der *erreichbaren* Punkte."""
+    if skip_reason:
+        return f"SKIP ({skip_reason})"
+    if pct >= STRONG_PCT:
+        return "STRONG_SETUP"
+    if pct >= WATCH_PCT:
+        return "WATCH"
+    return "SKIP"
+
+
 def _has_skip_flag(values: dict) -> str | None:
     """Return a skip reason string if the candidate should be hard-skipped."""
     # Pre-Earnings run-up: already pumped before earnings → eingepreist
@@ -62,6 +77,9 @@ def score_candidate(values: dict) -> dict:
             unknown.append("target_recently_cut")
         elif values["target_recently_cut"]:
             analyst_points += 1
+        # 4 Sub-Checks auf 3 Punkte: ohne Cap konnte eine Kategorie mehr
+        # Punkte liefern als ihr max_points und den Gesamtscore verzerren.
+        analyst_points = min(analyst_points, 3)
     if no_coverage:
         categories["analyst_expectation"] = {
             "points": 0, "max_points": 3, "state": "N/A", "unknown": unknown,
@@ -143,28 +161,40 @@ def score_candidate(values: dict) -> dict:
     categories["news_and_sec"] = _category(news_points, 3, unknown)
 
     total = sum(category["points"] for category in categories.values())
+
+    # ── Normalisierung auf die erreichbaren Punkte ─────────────────────
+    # Kategorien mit state N/A sind fuer dieses Symbol *strukturell* nicht
+    # messbar (Short Interest: nur Nasdaq-Listings; Analysten: kein Coverage).
+    # Sie als verlorene Punkte zu zaehlen benachteiligt NYSE-Werte systematisch
+    # um 3/14. Unsere eigenen Datenluecken (SEC offline, Kursziel 403) bleiben
+    # dagegen bewusst als fehlende Punkte stehen — die duerfen das Urteil nicht
+    # aufwerten.
+    max_points = 14
+    na_points = sum(category["max_points"]
+                    for category in categories.values()
+                    if category["state"] == "N/A")
+    reachable = max(1, max_points - na_points)
+    pct = round(total / reachable * 100, 1)
+
     skip_reason = _has_skip_flag(values)
     label = None
     if completeness["final_recommendation_allowed"]:
-        if skip_reason:
-            label = f"SKIP ({skip_reason})"
-        elif total >= 10:
-            label = "STRONG_SETUP"
-        elif total >= 6:
-            label = "WATCH"
-        else:
-            label = "SKIP"
+        # Schwellen entsprechen dem alten Absolutmassstab (10/14 bzw. 6/14),
+        # nur eben auf die erreichbaren Punkte bezogen.
+        label = label_for(pct, skip_reason)
 
     return {
         "state": completeness["state"],
         "missing": completeness["missing"],
         "final_recommendation_allowed": completeness["final_recommendation_allowed"],
         "total_points": total,
-        "max_points": 14,
+        "max_points": max_points,
+        "reachable_points": reachable,
+        "score_pct": pct,
         "label": label,
         "skip_reason": skip_reason,
         "categories": categories,
     }
 
 
-__all__ = ["score_candidate"]
+__all__ = ["score_candidate", "label_for", "STRONG_PCT", "WATCH_PCT"]

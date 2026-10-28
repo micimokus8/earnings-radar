@@ -14,7 +14,16 @@ class ReplayTests(unittest.TestCase):
         candidate = report["candidates"][0]
         self.assertEqual(candidate["status"], "PASS")
         self.assertEqual(candidate["score"]["label"], "SKIP")
-        self.assertEqual(candidate["score"]["total_points"], 5)
+        # Das Fixture liefert keine 52W-/5d-Felder (Chart-Kategorie hat seit dem
+        # Ausbau 5 Punkte). 3 Punkte sind fuer diesen Input korrekt; die
+        # fehlenden Chart-Punkte muessen als unknown sichtbar bleiben und
+        # duerfen die erreichbaren Punkte NICHT erhoehen.
+        self.assertEqual(candidate["score"]["total_points"], 3)
+        self.assertEqual(candidate["score"]["reachable_points"], 14)
+        self.assertEqual(candidate["score"]["score_pct"], 21.4)
+        chart = candidate["score"]["categories"]["chart_confirmation"]
+        self.assertEqual(chart["state"], "PARTIAL")
+        self.assertIn("distance_to_52w_pct", chart["unknown"])
         self.assertEqual(report["quality"]["missing_fields"], {})
 
     def test_fixture_runs_are_deterministic(self):

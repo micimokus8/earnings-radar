@@ -34,7 +34,8 @@ def _candidate_block(candidate: dict) -> str:
     top_headline = candidate.get("top_headline")
     lines = [
         f"Symbol: {candidate.get('symbol')}",
-        f"Label/Score: {score.get('label')} ({score.get('total_points', 0)}/14)",
+        f"Label/Score: {score.get('label')} ({score.get('total_points', 0)}/"
+        f"{score.get('reachable_points', 14)} = {score.get('score_pct', 0):.0f}%)",
         f"Skip-Reason: {score.get('skip_reason', 'keine')}",
         f"Earnings: {calendar.get('earnings_date')} ({calendar.get('earnings_timing')})",
         # Earnings-Hunt key metrics

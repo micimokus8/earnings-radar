@@ -39,14 +39,25 @@ def _num(value, suffix="", digits=2):
     return f"{text}{suffix}"
 
 
+def _score_text(score: dict) -> str:
+    """'9/11 (82 %)'. Nenner = erreichbare Punkte, nicht pauschal 14."""
+    total = score.get("total_points", 0) or 0
+    reachable = score.get("reachable_points") or score.get("max_points", 14)
+    pct = score.get("score_pct")
+    if pct is None:
+        pct = round(total / reachable * 100, 1) if reachable else 0.0
+    return f"{total}/{reachable} ({pct:.0f} %)"
+
+
 def _candidate_header(candidate: dict, total: int, maxp: int) -> str:
-    lab = (candidate.get("score") or {}).get("label")
+    score = candidate.get("score") or {}
+    lab = score.get("label")
     emoji = _EMO.get(lab, "◯")
     name = _display(candidate)
-    skip_reason = (candidate.get("score") or {}).get("skip_reason")
+    text = _score_text(score)
     if lab:
-        return f"{emoji} {name} — Score: {total}/{maxp} — {_LABEL_DE.get(lab, lab)}"
-    return f"{emoji} {name} — Score: {total}/{maxp} — ⚠ unvollständig"
+        return f"{emoji} {name} — Score: {text} — {_LABEL_DE.get(lab, lab)}"
+    return f"{emoji} {name} — Score: {text} — ⚠ unvollständig"
 
 
 def _candidate_rows(candidate: dict) -> list[str]:
@@ -218,17 +229,18 @@ def render_report(
     ranked = sorted(
         report["candidates"],
         key=lambda c: (
+            -((c.get("score") or {}).get("score_pct") or 0),
             -((c.get("score") or {}).get("total_points", 0) or 0),
             _ticker(c.get("symbol", "?")).upper(),
         ),
     )
     for i, c in enumerate(ranked[:10], 1):
         ticker = _display(c)
-        sc = (c.get("score") or {}).get("total_points", 0) or 0
-        raw_label = (c.get("score") or {}).get("label")
+        score = c.get("score") or {}
+        raw_label = score.get("label")
         label = _LABEL_DE.get(raw_label, "unvollständig") if raw_label else "unvollständig"
         medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-        lines.append(f"• {medal} {ticker} — {sc}/14 — {label}")
+        lines.append(f"• {medal} {ticker} — {_score_text(score)} — {label}")
 
     if empfehlung:
         lines.append("")

@@ -21,6 +21,7 @@ def build_report(
     ordered = sorted(
         candidates,
         key=lambda row: (
+            -(row.get("score", {}).get("score_pct") or 0),
             -(row.get("score", {}).get("total_points") or 0),
             row.get("symbol", ""),
         ),
