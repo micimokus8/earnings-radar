@@ -64,8 +64,11 @@ def main() -> int:
         return 0
 
     model = load_optional_text(args.llm_model_file) or args.llm_model
+    lessons_path = pathlib.Path("data/ledger/lessons.md")
+    lessons = lessons_path.read_text(encoding="utf-8") if lessons_path.exists() else None
     result = interpret_candidates(
-        labelled, api_key=api_key, base_url=args.llm_base_url, model=model
+        labelled, api_key=api_key, base_url=args.llm_base_url, model=model,
+        lessons=lessons, timeout=240.0,
     )
     deutung = result.get("deutung", {})
     empfehlung = result.get("empfehlung", "")
@@ -88,6 +91,20 @@ def main() -> int:
         lines.append("")
         lines.append("🎯 Meine Empfehlung")
         lines.append(empfehlung)
+
+    # Thesen persistieren -> Pump-Ledger kann sie spaeter fuer das Postmortem
+    # dem Snapshot zuordnen (sonst geht die Begruendung mit der TG-Nachricht verloren).
+    theses_dir = pathlib.Path("data/ledger/theses")
+    theses_dir.mkdir(parents=True, exist_ok=True)
+    theses = {
+        str(c.get("symbol", "")).split(":")[-1]: deutung.get(c.get("symbol"))
+        for c in labelled
+    }
+    (theses_dir / f"{report_date}_{args.report_type}.json").write_text(
+        json.dumps({"empfehlung": empfehlung, "theses": theses}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     print("\n".join(lines).strip())
     return 0
 

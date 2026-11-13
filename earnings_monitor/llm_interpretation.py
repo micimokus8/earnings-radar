@@ -57,15 +57,22 @@ def _candidate_block(candidate: dict) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(candidates: list[dict]) -> str:
+def build_prompt(candidates: list[dict], lessons: str | None = None) -> str:
     blocks = "\n\n".join(_candidate_block(c) for c in candidates)
     markers = "\n".join(
         f"{_DEUTUNG_MARKER}{c.get('symbol')} ... PUMP-THESE: (1-2 Sätze warum Pump likely/unlikely) | RISIKO: (1 Satz was dagegen spricht) | SCORE-CONFLICT: (falls Score und Pump-Potential divergieren, sonst 'kein')"
         for c in candidates
     )
+    lesson_block = ""
+    if lessons and lessons.strip():
+        lesson_block = (
+            "\n\nBisherige Erfahrungswerte aus abgeschlossenen Earnings (nutze sie als "
+            "Gewichtung, erfinde nichts dazu):\n"
+            f"{lessons.strip()}\n"
+        )
     return (
         "Kandidaten des heutigen Earnings-Scans (deterministisch, Skala 0-14):\n\n"
-        f"{blocks}\n\n"
+        f"{blocks}{lesson_block}\n\n"
         "Liefere jetzt pro Kandidat eine PUMP-ANALYSE und am Ende ein "
         "Gesamt-Ranking nach PUMP-POTENTIAL (nicht nach Score). Top 3 Kandidaten "
         "mit Begründung. Verwende EXAKT dieses Format:\n\n"
@@ -93,6 +100,7 @@ def interpret_candidates(
     model: str,
     requester=_default_requester,
     timeout: float = 60.0,
+    lessons: str | None = None,
 ) -> dict:
     """Return {'deutung': {symbol: text}, 'empfehlung': str} or empty on failure."""
     if not candidates:
@@ -100,14 +108,14 @@ def interpret_candidates(
     payload = {
         "model": model,
         "temperature": 0.4,
-        # Reasoning-Modelle (z.B. z-ai/glm-5.3-flash) verbrauchen das Budget
-        # zuerst fuer "reasoning" und liefern dann content=null. Bei 1600
-        # Tokens kam am 28.10. nur Denken, keine Antwort. 6000 deckt Denken
-        # (~1.5-3k) plus die eigentliche Analyse ab; Kosten bleiben < 0,001 $.
-        "max_tokens": 6000,
+        # Reasoning-Modelle (deepseek-v4.1-flash) verbrauchen das Budget zuerst
+        # fuer "reasoning"; am 03.11. waren 6002 Tokens verbraucht bevor die
+        # eigentliche Antwort begann -> finish_reason=length, content=null.
+        # 16000 deckt Reasoning (~6-10k) plus Analyse ab, Kosten < 0,01 $.
+        "max_tokens": 16000,
         "messages": [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(candidates)},
+            {"role": "user", "content": build_prompt(candidates, lessons=lessons)},
         ],
     }
     response = None
