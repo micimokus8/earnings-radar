@@ -24,7 +24,9 @@ from datetime import date as _date, datetime as _dt, timedelta
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-LEDGER = ROOT / "data" / "ledger"
+from earnings_monitor.paths import ledger_dir  # noqa: E402
+
+LEDGER = ledger_dir()
 OUTCOMES = LEDGER / "outcomes.jsonl"
 SNAPSHOTS = LEDGER / "snapshots.jsonl"
 POSTMORTEMS = LEDGER / "postmortems.jsonl"
@@ -75,9 +77,8 @@ def _prompt(batch: list[dict]) -> str:
         f = o.get("features") or {}
         blocks.append(
             f"Symbol: {o['symbol']} | Datum: {o['report_date']} | Verdict: {o['verdict']}\n"
-            f"Preis(Hint): {o.get('entry_price')} | Close Tag0: {o.get('day0_close')} | "
-            f"Close Tag1: {o.get('day1_close')} | Ret Tag0->1: {o.get('ret_close_day01')}% | "
-            f"Ret Entry->1: {o.get('ret_entry')}%\n"
+            f"Sitzung: {o.get('report_type')} | Schluss-Return: {o.get('ret_session_close')}% | "
+            f"Open-Return: {o.get('ret_session_open')}% | Entry-Return: {o.get('ret_entry')}%\n"
             f"Merkmale: RSI={f.get('rsi')}, Short%={f.get('short_pct')}, DTC={f.get('days_to_cover')}, "
             f"5d%={f.get('change_5d_pct')}, 1d%={f.get('daily_change_pct')}, ADX={f.get('adx')}, "
             f"Abstand52W%={f.get('distance_to_52w_pct')}, P<EMA20={f.get('below_ema20')}\n"
@@ -108,7 +109,7 @@ def cmd_run(args) -> int:
     outs = [json.loads(l) for l in OUTCOMES.read_text().splitlines() if l.strip()]
     todo = []
     for o in outs:
-        if o["verdict"] not in ("PUMP", "FLAT", "REINFALL"):
+        if o["verdict"] not in ("PUMP", "PUMP5", "FLAT", "LOSS", "REINFALL"):
             continue
         key = (o["report_date"], o["symbol"])
         if key in done:
@@ -190,34 +191,74 @@ def cmd_run(args) -> int:
     return 0
 
 
+def _measured_lines(days: int) -> list[str]:
+    """Hit rates from outcomes, independent of the LLM."""
+    if not OUTCOMES.exists():
+        return ["Noch keine ausgewerteten Signale."]
+    cutoff = (_date.today() - timedelta(days=days)).isoformat()
+    rows = []
+    for line in OUTCOMES.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("report_date", "") >= cutoff and row.get("verdict") in {"PUMP", "PUMP5", "FLAT", "LOSS", "REINFALL"}:
+            rows.append(row)
+    if not rows:
+        return ["Im gewählten Fenster gibt es noch keine abgeschlossenen Signale."]
+
+    def block(title, subset):
+        n = len(subset)
+        if n == 0:
+            return [f"{title}: keine Fälle."]
+        def rate(pred):
+            return 100.0 * sum(1 for row in subset if pred(row)) / n
+        return [
+            f"{title}: n={n}, mindestens +5 % {rate(lambda r: (r.get('ret_session_close') or r.get('ret_close_day01') or -999) >= 5):.0f}%, "
+            f"mindestens +10 % {rate(lambda r: r.get('verdict') == 'PUMP'):.0f}%, "
+            f"Verlust mindestens 5 % {rate(lambda r: r.get('verdict') in {'LOSS', 'REINFALL'}):.0f}%."
+        ]
+
+    lines = ["## Gemessene Häufigkeit (Sitzung korrekt, nicht vom Sprachmodell)"]
+    lines.extend(block("Alle Signale", rows))
+    for kind in ("AFTER_CLOSE", "BEFORE_OPEN"):
+        lines.extend(block(kind, [r for r in rows if r.get("report_type") == kind]))
+    lines.extend(block(
+        "Nicht gesperrt",
+        [r for r in rows if r.get("label") in {"STRONG_SETUP", "WATCH"}],
+    ))
+    return lines
+
+
 def cmd_week(args) -> int:
-    """Aggregiert die Lessons der letzten 7 Tage zu einem kompakten Prompt-Block."""
+    """Aggregiert gemessene Treffer und die Lessons der letzten Tage."""
+    cutoff = (_date.today() - timedelta(days=args.days)).isoformat()
+    lines = [f"# Earnings-Pump Lessons (Stand {_date.today().isoformat()})", ""]
+    lines.extend(_measured_lines(args.days))
+    lines.append("")
     if not POSTMORTEMS.exists():
-        print("Keine postmortems.")
+        lines.append("Noch keine Sprachmodell-Nachlese.")
+        LESSONS.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        print("lessons.md geschrieben, ohne Postmortems.")
         return 0
     recs = [json.loads(l) for l in POSTMORTEMS.read_text().splitlines() if l.strip()]
-    cutoff = (_date.today() - timedelta(days=args.days)).isoformat()
-    recent = [r for r in recs if r["report_date"] >= cutoff]
-    if not recent:
-        # Fallback: alle, falls noch keine 7 Tage Historie
-        recent = recs
-    # Nur echte Urteile (mit These) eingehen lassen, KEINE_THESE ist kein Lernsignal.
+    recent = [r for r in recs if r["report_date"] >= cutoff] or recs
     judged = [r for r in recent if r.get("urteil") in ("BESTAETIGT", "WIDERLEGT")]
     pumps = [r for r in judged if r["verdict"] == "PUMP" and r["urteil"] == "BESTAETIGT"]
     flops = [r for r in judged if r["urteil"] == "WIDERLEGT"]
-    lines = [f"# Earnings-Pump Lessons (Stand {_date.today().isoformat()})", ""]
-    lines.append(f"Ausgewertet: {len(recent)} Kandidaten, {len(judged)} mit These beurteilt "
+    lines.append(f"Sprachmodell: {len(recent)} Kandidaten, {len(judged)} mit These beurteilt "
                  f"({len(pumps)} bestätigte Pumps, {len(flops)} widerlegte Thesen).")
     lines.append("")
     lines.append("## Was bei Pump-Erkennung funktioniert hat (bestätigt)")
     for r in pumps[:15]:
         if r.get("lesson"):
-            lines.append(f"- {r['symbol']} ({r['ret_close_day01']}%): {r['lesson']}")
+            move = r.get("ret_session_close", r.get("ret_close_day01"))
+            lines.append(f"- {r['symbol']} ({move}%): {r['lesson']}")
     lines.append("")
     lines.append("## Was getaeuscht hat (widerlegt)")
     for r in flops[:15]:
         if r.get("lesson"):
-            lines.append(f"- {r['symbol']} ({r['ret_close_day01']}%): {r['lesson']}")
+            move = r.get("ret_session_close", r.get("ret_close_day01"))
+            lines.append(f"- {r['symbol']} ({move}%): {r['lesson']}")
     LESSONS.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
     print(f"lessons.md geschrieben: {len(recent)} ausgewertet, {len(judged)} beurteilt, "
           f"{len(pumps)} bestätigt, {len(flops)} widerlegt")

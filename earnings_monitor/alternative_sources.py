@@ -17,7 +17,16 @@ try:
 except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
-from .indicators import calculate_adx, calculate_ema, calculate_macd
+from .bars import drop_unfinished_daily, drop_unfinished_intraday
+from .indicators import (
+    average_true_range,
+    calculate_adx,
+    calculate_ema,
+    calculate_macd,
+    next_resistance,
+    stochastic_k,
+)
+from .news_terms import classify_headlines
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
 TWELVEDATA_BASE = "https://api.twelvedata.com"
@@ -216,7 +225,35 @@ class FinnhubForecastClient(FinnhubBase):
         if status_r == 200 and isinstance(recs, list) and recs and isinstance(recs[0], dict):
             latest = recs[0]
             forecast["rating_buy"] = int(latest.get("buy", 0) or 0) + int(latest.get("strongBuy", 0) or 0)
-            forecast["analyst_rating"] = "buy" if forecast["rating_buy"] else "neutral"
+
+            def _buy_share(row: dict) -> float | None:
+                buys = int(row.get("buy", 0) or 0) + int(row.get("strongBuy", 0) or 0)
+                sells = int(row.get("sell", 0) or 0) + int(row.get("strongSell", 0) or 0)
+                holds = int(row.get("hold", 0) or 0)
+                total = buys + sells + holds
+                if total <= 0:
+                    return None
+                return buys / total
+
+            latest_share = _buy_share(latest)
+            # A single buy vote is not a rating. Only a clear majority is named,
+            # and a point requires the share to have risen versus the prior period.
+            if latest_share is None:
+                missing.append("analyst_rating")
+            elif latest_share >= 0.6:
+                forecast["analyst_rating"] = "positive"
+            elif latest_share <= 0.3:
+                forecast["analyst_rating"] = "negative"
+            else:
+                forecast["analyst_rating"] = "mixed"
+            if len(recs) >= 2 and isinstance(recs[1], dict):
+                previous_share = _buy_share(recs[1])
+                if latest_share is not None and previous_share is not None:
+                    delta = latest_share - previous_share
+                    if delta >= 0.05:
+                        forecast["analyst_revision"] = "up"
+                    elif delta <= -0.10:
+                        forecast["analyst_revision"] = "down"
         else:
             missing.append("analyst_rating")
         forecast["missing"] = sorted(set(missing))
@@ -275,10 +312,9 @@ class FinnhubNewsClient(FinnhubBase):
             if not headlines:
                 return {"status": "UNKNOWN", "headlines": [], "negative_news": None,
                         "error": "yahoo-rss returned no headlines"}
-            negative_terms = ("miss", "downgrade", "lawsuit", "recall", "bankruptcy", "dilution", "fraud", "warns")
-            negative = any(any(term in h["headline"].lower() for term in negative_terms) for h in headlines)
+            tagged = classify_headlines([h["headline"] for h in headlines])
             return {"status": "PASS", "source": "yahoo_rss", "headlines": headlines[:10],
-                    "negative_news": negative}
+                    **tagged}
         except Exception as exc:
             return {"status": "UNKNOWN", "headlines": [], "negative_news": None,
                     "error": f"yahoo-rss {type(exc).__name__}"}
@@ -316,8 +352,7 @@ class FinnhubNewsClient(FinnhubBase):
                               "published": item.get("datetime"),
                               "link": item.get("url"),
                               "related": item.get("related") or None})
-        negative_terms = ("miss", "downgrade", "lawsuit", "recall", "bankruptcy", "dilution", "fraud", "warns")
-        negative = any(any(term in h["headline"].lower() for term in negative_terms) for h in headlines)
+        tagged = classify_headlines([h["headline"] for h in headlines])
         if not headlines:
             fallback = self._yahoo_fallback(symbol, as_of=as_of)
             if fallback.get("status") == "PASS":
@@ -325,7 +360,7 @@ class FinnhubNewsClient(FinnhubBase):
                 return fallback
             return {"status": "UNKNOWN", "headlines": [], "negative_news": None,
                     "error": "company-news empty; " + fallback.get("error", "yahoo-rss unavailable")}
-        return {"status": "PASS", "headlines": headlines[:10], "negative_news": negative}
+        return {"status": "PASS", "headlines": headlines[:10], **tagged}
 
 
 def _rsi(closes: list[float], period: int = 14) -> float | None:
@@ -375,39 +410,91 @@ class TwelveDataTechnicalClient:
         bars = []
         for row in data["values"]:
             try:
-                bars.append({"o": float(row["open"]), "h": float(row["high"]), "l": float(row["low"]), "c": float(row["close"]), "v": float(row.get("volume", 0))})
+                bar = {
+                    "o": float(row["open"]),
+                    "h": float(row["high"]),
+                    "l": float(row["low"]),
+                    "c": float(row["close"]),
+                    "v": float(row.get("volume", 0)),
+                }
             except (KeyError, TypeError, ValueError):
                 continue
+            if row.get("datetime"):
+                bar["datetime"] = row["datetime"]
+            bars.append(bar)
         if not bars:
             self.last_error = "empty or invalid time_series values"
         return bars or None
 
     def get(self, symbol: str) -> dict:
         bars_1d, bars_4h = self._get_bars(symbol, "1day"), self._get_bars(symbol, "4h")
+        bars_1d = drop_unfinished_daily(bars_1d or [])
+        bars_4h = drop_unfinished_intraday(bars_4h or [], hours=4)
         if not bars_1d or not bars_4h:
             return {"status": "UNKNOWN", "values": {}, "unknown": ["ohlcv_1d", "ohlcv_4h"],
                     "error": self.last_error or "twelve-data OHLCV unavailable"}
         c1, c4 = [b["c"] for b in bars_1d], [b["c"] for b in bars_4h]
         macd = calculate_macd(c1)
-        # 52W-Hoch/Abstand/5d/1d lokal aus den Daily-Bars ableiten — die
-        # TVRemix-Technicals lieferten diese Felder direkt, TwelveData nicht.
+        # 52W-Hoch/Abstand/5d/1d lokal aus den abgeschlossenen Daily-Bars.
         year = bars_1d[-252:]
         high_52w = max(b["h"] for b in year) if year else None
         high_60d = max(b["h"] for b in bars_1d[-60:]) if bars_1d else None
+        resist = next_resistance(bars_1d)
+        atr = average_true_range(bars_1d, 14)
+        room = round((resist / c1[-1] - 1) * 100, 2) if resist and c1[-1] else None
         values = {"price_1d": c1[-1], "price_4h": c4[-1], "ema20_1d": calculate_ema(c1, 20)[-1],
                   "ema20_4h": calculate_ema(c4, 20)[-1], "ema50_1d": calculate_ema(c1, 50)[-1],
                   "rsi_1d": _rsi(c1), "adx_1d": calculate_adx(bars_1d, 14),
+                  "stoch_k_1d": stochastic_k(bars_1d, 14),
+                  "atr_14": atr,
                   "macd_1d": macd["line"] if macd else None,
                   "macd_signal_1d": macd["signal"] if macd else None,
                   "macd_histogram_1d": macd["histogram"] if macd else None,
                   "high_52w": high_52w,
                   "recent_high_60d": high_60d,
+                  "resistance_price": resist,
+                  "room_to_resistance_pct": room,
                   "distance_to_52w_pct": round((c1[-1] / high_52w - 1) * 100, 2) if high_52w else None,
                   "change_5d_pct": round((c1[-1] / c1[-6] - 1) * 100, 2) if len(c1) >= 6 else None,
                   "daily_change_pct": round((c1[-1] / c1[-2] - 1) * 100, 2) if len(c1) >= 2 else None}
+        daily_bars = [
+            {"date": str(bar.get("datetime") or "")[:10], "open": bar["o"], "high": bar["h"],
+             "low": bar["l"], "close": bar["c"]}
+            for bar in bars_1d if bar.get("datetime")
+        ]
         unknown = [key for key, value in values.items() if value is None]
         return {"status": "PASS" if not unknown else "PARTIAL", "values": values, "unknown": unknown,
-                "source": "twelve_data"}
+                "daily_bars": daily_bars, "source": "twelve_data"}
+
+
+class FinnhubEarningsHistoryClient(FinnhubBase):
+    """Past prints from Finnhub's earnings calendar. Uses the existing key."""
+
+    def get(self, symbol: str, *, as_of: str) -> dict:
+        day = (as_of or "")[:10]
+        try:
+            end = datetime.fromisoformat(day)
+        except ValueError:
+            end = datetime.now(timezone.utc)
+        start = (end - timedelta(days=365 * 5)).date().isoformat()
+        status, payload = self._get(
+            "calendar/earnings",
+            {"symbol": _ticker(symbol), "from": start, "to": day or end.date().isoformat()},
+        )
+        rows = payload.get("earningsCalendar") if isinstance(payload, dict) else None
+        if status != 200 or not isinstance(rows, list):
+            return {"status": "UNKNOWN", "events": [], "error": f"calendar/earnings HTTP {status}"}
+        events = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            events.append({
+                "date": row.get("date"),
+                "hour": row.get("hour"),
+                "eps_actual": row.get("epsActual"),
+                "eps_estimate": row.get("epsEstimate"),
+            })
+        return {"status": "PASS" if events else "UNKNOWN", "events": events}
 
 
 class StaticCalendarClient:

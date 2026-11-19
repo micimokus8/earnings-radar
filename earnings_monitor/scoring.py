@@ -1,200 +1,243 @@
+"""Pump-potential score, fixed at 8 points. Missing data scores 0.
+
+The percent of points is not a probability. Green is allowed only when the
+technical bucket beat the list average in the public replay; see bucket_stats.
+"""
+
 from __future__ import annotations
 
-from .rules import evaluate_core_completeness
+from earnings_monitor.bucket_stats import (
+    GREEN_MIN_TECHNICAL_POINTS,
+    WATCH_MIN_POINTS,
+    note_for,
+)
+from earnings_monitor.rules import evaluate_core_completeness
+
+MAX_POINTS = 8
 
 
-def _category(points, max_points, unknown=None):
-    unknown = unknown or []
-    return {
-        "points": points,
-        "max_points": max_points,
-        "state": "PARTIAL" if unknown else "PASS",
-        "unknown": unknown,
-    }
+def _spot(values: dict):
+    for key in ("price", "price_1d"):
+        value = values.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+    return None
 
 
-STRONG_PCT = 71.4   # entspricht dem alten 10/14
-WATCH_PCT = 42.9    # entspricht dem alten 6/14
+def _distance_to_52w(values: dict):
+    spot = _spot(values)
+    high = values.get("high_52w")
+    if spot is not None and isinstance(high, (int, float)) and high > 0:
+        return (spot / float(high) - 1.0) * 100.0
+    stored = values.get("distance_to_52w_pct")
+    if isinstance(stored, (int, float)):
+        return float(stored)
+    return None
 
 
-def label_for(pct: float, skip_reason: str | None) -> str:
-    """Label aus dem Prozentwert der *erreichbaren* Punkte."""
+def _room_to_resistance(values: dict):
+    spot = _spot(values)
+    resist = values.get("resistance_price")
+    if spot is not None and isinstance(resist, (int, float)) and resist > 0:
+        return (float(resist) / spot - 1.0) * 100.0
+    stored = values.get("room_to_resistance_pct")
+    if isinstance(stored, (int, float)):
+        return float(stored)
+    return None
+
+
+def _exhaustion(values: dict, distance) -> str | None:
+    reasons = []
+    if distance is not None and distance > -3:
+        reasons.append("NAHE_52W_HOCH")
+    rsi = values.get("rsi_1d")
+    if isinstance(rsi, (int, float)) and rsi >= 75:
+        reasons.append("RSI_UEBERKAUFT")
+    stoch = values.get("stoch_k_1d")
+    if isinstance(stoch, (int, float)) and stoch >= 90:
+        reasons.append("STOCHASTIK_OBEN")
+    if values.get("news_severity") == "severe" or (
+        values.get("negative_news") is True and values.get("news_severity") is None
+    ):
+        # Legacy callers that only set negative_news=True still block.
+        # A tagged soft negative does not, it only removes news points.
+        if values.get("news_severity") != "soft":
+            reasons.append("NEWS_NEGATIV")
+    if values.get("analyst_revision") == "down" or values.get("target_revision") == "down":
+        reasons.append("ERWARTUNG_GESENKT")
+    if values.get("target_recently_cut") is True and values.get("target_revision") != "up":
+        reasons.append("ERWARTUNG_GESENKT")
+    # de-duplicate while keeping order
+    unique = []
+    for reason in reasons:
+        if reason not in unique:
+            unique.append(reason)
+    return "+".join(unique) if unique else None
+
+
+def _room_points(distance, room) -> tuple[int, list[str]]:
+    unknown = []
+    points = 0
+    if distance is None:
+        unknown.append("distance_to_52w_pct")
+    elif distance <= -8:
+        points += 1
+    if room is None:
+        unknown.append("room_to_resistance_pct")
+    elif 3 <= room <= 15:
+        points += 1
+    return points, unknown
+
+
+def _history_points(values: dict) -> tuple[int, list[str]]:
+    unknown = []
+    points = 0
+    beat_n = values.get("beat_n") or 0
+    beat = values.get("beat_rate")
+    if not isinstance(beat_n, int) or beat_n < 4 or beat is None:
+        unknown.append("beat_rate")
+    elif beat >= 0.5:
+        points += 1
+    hist_n = values.get("hist_n") or 0
+    hist = values.get("hist_reaction_pct")
+    if not isinstance(hist_n, int) or hist_n < 4 or hist is None:
+        unknown.append("hist_reaction_pct")
+    elif hist > 0:
+        points += 1
+    return points, unknown
+
+
+def _revision_points(values: dict) -> tuple[int, list[str]]:
+    unknown = []
+    points = 0
+    analyst = values.get("analyst_revision")
+    if analyst not in {"up", "down"}:
+        unknown.append("analyst_revision")
+    elif analyst == "up":
+        points += 1
+    target = values.get("target_revision")
+    if target not in {"up", "down"}:
+        unknown.append("target_revision")
+    elif target == "up":
+        points += 1
+    return points, unknown
+
+
+def _news_points(values: dict) -> tuple[int, list[str], bool]:
+    """Positive headlines add points. Silence adds nothing.
+
+    A soft negative headline yields no points and blocks green.
+    """
+    unknown = []
+    if values.get("news_status") not in {"PASS", "FAIL"} and values.get("positive_news_count") is None:
+        unknown.append("news")
+        return 0, unknown, False
+    soft = values.get("news_severity") == "soft"
+    if values.get("negative_news") is True and soft:
+        return 0, unknown, True
+    if values.get("negative_news") is True:
+        return 0, unknown, False
+    count = values.get("positive_news_count")
+    if not isinstance(count, int):
+        unknown.append("positive_news")
+        return 0, unknown, False
+    points = 0
+    if count >= 1:
+        points += 1
+    if count >= 2:
+        points += 1
+    return points, unknown, False
+
+
+def label_for(points: int, skip_reason: str | None, *, technical_points: int, strong_blocked: bool) -> str:
     if skip_reason:
         return f"SKIP ({skip_reason})"
-    if pct >= STRONG_PCT:
+    green_min = GREEN_MIN_TECHNICAL_POINTS
+    if (
+        green_min is not None
+        and technical_points >= green_min
+        and not strong_blocked
+        and points >= green_min
+    ):
         return "STRONG_SETUP"
-    if pct >= WATCH_PCT:
+    if points >= WATCH_MIN_POINTS and not strong_blocked:
+        return "WATCH"
+    if points >= WATCH_MIN_POINTS and strong_blocked:
         return "WATCH"
     return "SKIP"
 
 
-def _has_skip_flag(values: dict) -> str | None:
-    """Return a skip reason string if the candidate should be hard-skipped."""
-    # Pre-Earnings run-up: already pumped before earnings → eingepreist
-    c5 = values.get("change_5d_pct")
-    dist52 = values.get("distance_to_52w_pct")
-    if c5 is not None and dist52 is not None:
-        if c5 >= 15 and dist52 > -10:
-            return "EINGEPREIST"
-    # Overbought
-    rsi = values.get("rsi_1d")
-    if rsi is not None and rsi > 75:
-        return "OVERBOUGHT"
-    # Post-Earnings crash (LULU pattern)
-    d1 = values.get("daily_change_pct")
-    if d1 is not None and d1 <= -10:
-        return "POST_EARNINGS_CRASH"
-    return None
-
-
 def score_candidate(values: dict) -> dict:
     completeness = evaluate_core_completeness(values)
-    categories = {}
+    distance = _distance_to_52w(values)
+    room = _room_to_resistance(values)
+    room_points, room_unknown = _room_points(distance, room)
+    history_points, history_unknown = _history_points(values)
+    revision_points, revision_unknown = _revision_points(values)
+    news_points, news_unknown, soft_negative = _news_points(values)
 
-    # ── Analyst Expectation (3 pts) ────────────────────────────────────
-    unknown = []
-    analyst_points = 0
-    has_analyst_signal = any(
-        values.get(field) is not None
-        for field in ("target_upside_pct", "eps_estimate", "analyst_rating")
-    )
-    no_coverage = not has_analyst_signal
-    if no_coverage:
-        unknown = ["target_upside_pct", "eps_estimate", "analyst_rating"]
-    else:
-        if values.get("target_upside_pct") is None:
-            unknown.append("target_upside_pct")
-        elif values["target_upside_pct"] > 30:
-            analyst_points += 1
-        if values.get("eps_estimate") is None:
-            unknown.append("eps_estimate")
-        elif values["eps_estimate"] <= 0:
-            analyst_points += 1
-        rating = str(values.get("analyst_rating") or "").lower()
-        if rating in {"strong buy", "buy", "outperform", "overweight"}:
-            analyst_points += 1
-        if values.get("target_recently_cut") is None:
-            unknown.append("target_recently_cut")
-        elif values["target_recently_cut"]:
-            analyst_points += 1
-        # 4 Sub-Checks auf 3 Punkte: ohne Cap konnte eine Kategorie mehr
-        # Punkte liefern als ihr max_points und den Gesamtscore verzerren.
-        analyst_points = min(analyst_points, 3)
-    if no_coverage:
-        categories["analyst_expectation"] = {
-            "points": 0, "max_points": 3, "state": "N/A", "unknown": unknown,
-        }
-    else:
-        categories["analyst_expectation"] = _category(analyst_points, 3, unknown)
+    categories = {
+        "room": {
+            "points": room_points,
+            "max_points": 2,
+            "state": "PARTIAL" if room_unknown else "PASS",
+            "unknown": room_unknown,
+        },
+        "history": {
+            "points": history_points,
+            "max_points": 2,
+            "state": "PARTIAL" if history_unknown else "PASS",
+            "unknown": history_unknown,
+        },
+        "revisions": {
+            "points": revision_points,
+            "max_points": 2,
+            "state": "PARTIAL" if revision_unknown else "PASS",
+            "unknown": revision_unknown,
+        },
+        "news": {
+            "points": news_points,
+            "max_points": 2,
+            "state": "PARTIAL" if news_unknown else "PASS",
+            "unknown": news_unknown,
+        },
+    }
+    total = room_points + history_points + revision_points + news_points
+    technical = room_points + history_points
+    skip_reason = _exhaustion(values, distance)
+    # de-duplicate ERWARTUNG if both flags fired
+    if skip_reason:
+        parts = skip_reason.split("+")
+        skip_reason = "+".join(dict.fromkeys(parts))
 
-    # ── Short Interest (3 pts) — calibrated for $2B+ caps ───────────────
-    if values.get("short_interest_supported") is False:
-        categories["short_interest"] = {
-            "points": 0, "max_points": 3, "state": "N/A", "unknown": [],
-        }
-    else:
-        unknown = []
-        short_points = 0
-        short_pct = values.get("short_pct_outstanding")
-        days = values.get("days_to_cover")
-        if short_pct is None:
-            unknown.append("short_pct_outstanding")
-        else:
-            short_points += int(short_pct > 3) + int(short_pct > 8)
-        if days is None:
-            unknown.append("days_to_cover")
-        else:
-            short_points += int(days > 3) + int(days > 5)
-        short_points = min(short_points, 3)
-        categories["short_interest"] = _category(short_points, 3, unknown)
-
-    # ── Chart Confirmation (5 pts) — Earnings-Hunt calibrated ───────────
-    # Contrarian bounce setup + "Raum nach oben" + pre-earnings protection
-    unknown = []
-    chart_points = 0
-
-    # ① Bounce Setup (2 pkt): oversold + below mean = revert potential
-    rsi = values.get("rsi_1d")
-    if rsi is None:
-        unknown.append("rsi_1d")
-    elif rsi < 40:
-        chart_points += 1
-    p1, e20 = values.get("price_1d"), values.get("ema20_1d")
-    if p1 is None or e20 is None:
-        unknown.append("price_1d/ema20_1d")
-    elif p1 < e20:
-        chart_points += 1
-
-    # ② Raum nach oben (2 pkt): distance to 52W high
-    dist52 = values.get("distance_to_52w_pct")
-    if dist52 is None:
-        unknown.append("distance_to_52w_pct")
-    elif dist52 <= -30:
-        chart_points += 2
-    elif dist52 <= -15:
-        chart_points += 1
-
-    # ③ Pre-Earnings Schutz (1 pkt): kein Run-up
-    c5 = values.get("change_5d_pct")
-    if c5 is None:
-        unknown.append("change_5d_pct")
-    elif c5 < 10:
-        chart_points += 1
-
-    categories["chart_confirmation"] = _category(chart_points, 5, unknown)
-
-    # ── News & SEC (3 pts) ──────────────────────────────────────────────
-    unknown = []
-    news_points = 0
-    if values.get("news_status") != "PASS":
-        unknown.append("news")
-    elif values.get("negative_news") is False:
-        news_points += 1
-    if values.get("insider_status") in {"NO_DIRECT_SELL", "NO_RECENT_FILING_FOUND"}:
-        news_points += 1
-    elif values.get("insider_status") in {None, "UNKNOWN", "PARTIAL"}:
-        unknown.append("insider")
-    if values.get("dilution_status") == "NO_DILUTION_FILING_FOUND":
-        news_points += 1
-    elif values.get("dilution_status") in {None, "UNKNOWN", "PARTIAL"}:
-        unknown.append("dilution")
-    categories["news_and_sec"] = _category(news_points, 3, unknown)
-
-    total = sum(category["points"] for category in categories.values())
-
-    # ── Normalisierung auf die erreichbaren Punkte ─────────────────────
-    # Kategorien mit state N/A sind fuer dieses Symbol *strukturell* nicht
-    # messbar (Short Interest: nur Nasdaq-Listings; Analysten: kein Coverage).
-    # Sie als verlorene Punkte zu zaehlen benachteiligt NYSE-Werte systematisch
-    # um 3/14. Unsere eigenen Datenluecken (SEC offline, Kursziel 403) bleiben
-    # dagegen bewusst als fehlende Punkte stehen — die duerfen das Urteil nicht
-    # aufwerten.
-    max_points = 14
-    na_points = sum(category["max_points"]
-                    for category in categories.values()
-                    if category["state"] == "N/A")
-    reachable = max(1, max_points - na_points)
-    pct = round(total / reachable * 100, 1)
-
-    skip_reason = _has_skip_flag(values)
     label = None
     if completeness["final_recommendation_allowed"]:
-        # Schwellen entsprechen dem alten Absolutmassstab (10/14 bzw. 6/14),
-        # nur eben auf die erreichbaren Punkte bezogen.
-        label = label_for(pct, skip_reason)
+        label = label_for(
+            total,
+            skip_reason,
+            technical_points=technical,
+            strong_blocked=soft_negative,
+        )
 
+    pct = round(total / MAX_POINTS * 100, 1)
     return {
         "state": completeness["state"],
         "missing": completeness["missing"],
         "final_recommendation_allowed": completeness["final_recommendation_allowed"],
         "total_points": total,
-        "max_points": max_points,
-        "reachable_points": reachable,
+        "max_points": MAX_POINTS,
+        "reachable_points": MAX_POINTS,
+        "technical_points": technical,
         "score_pct": pct,
         "label": label,
         "skip_reason": skip_reason,
+        "blocked": bool(skip_reason),
+        "strong_blocked": soft_negative,
+        "frequency_note": note_for(technical),
+        "distance_to_52w_pct": None if distance is None else round(distance, 2),
+        "room_to_resistance_pct": None if room is None else round(room, 2),
         "categories": categories,
     }
 
 
-__all__ = ["score_candidate", "label_for", "STRONG_PCT", "WATCH_PCT"]
+__all__ = ["score_candidate", "label_for", "MAX_POINTS"]

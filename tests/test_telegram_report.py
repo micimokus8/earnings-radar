@@ -25,12 +25,16 @@ def _sample():
                     "insider_status": "NO_DIRECT_SELL",
                 },
                 "score": {
-                    "total_points": 10, "max_points": 14, "label": "STRONG_SETUP",
+                    "total_points": 3, "max_points": 8, "technical_points": 2,
+                    "label": "WATCH", "blocked": False,
+                    "frequency_note": "Technik 2 von 4, Beispiel.",
+                    "distance_to_52w_pct": -12.0,
+                    "room_to_resistance_pct": 6.0,
                     "categories": {
-                        "analyst_expectation": {"points": 1},
-                        "short_interest": {"points": 0},
-                        "chart_confirmation": {"points": 5},
-                        "news_and_sec": {"points": 4},
+                        "room": {"points": 2},
+                        "history": {"points": 0},
+                        "revisions": {"points": 1},
+                        "news": {"points": 0},
                     },
                 },
             },
@@ -46,16 +50,18 @@ class TelegramReportTests(unittest.TestCase):
             empfehlung="AAPL ist der Top-Kandidat.",
         )
         self.assertIn("BEFORE OPEN — Earnings 2026-08-13", text)
-        self.assertIn("STARKES Setup", text)
-        self.assertIn("① Analysten", text)
-        self.assertIn("② Short", text)
-        self.assertIn("③ Chart", text)
-        self.assertIn("④ News/SEC", text)
+        self.assertIn("Beobachten, nicht grün", text)
+        self.assertIn("3 von 8 Punkten", text)
+        self.assertIn("① Raum", text)
+        self.assertIn("② Historie", text)
+        self.assertIn("③ Revision", text)
+        self.assertIn("④ News", text)
+        self.assertIn("Schluss des Vortags", text)
         self.assertIn("MACD", text)
         self.assertIn("ADX", text)
         self.assertIn("P1D", text)
         self.assertIn("Deutung: Starkes Setup", text)
-        self.assertIn("RANKING", text)
+        self.assertIn("Rangliste", text)
         self.assertIn("Meine Empfehlung", text)
         self.assertIn("AAPL ist der", text)
 
@@ -84,11 +90,11 @@ class TelegramReportTests(unittest.TestCase):
         text = render_report(report)
         self.assertIn("AAPL (Apple Inc.)", text)
         # Auch im Ranking.
-        self.assertIn("AAPL (Apple Inc.) — ", text.split("RANKING", 1)[1])
+        self.assertIn("AAPL (Apple Inc.) — ", text.split("Rangliste", 1)[1])
 
     def test_missing_name_falls_back_to_ticker(self):
         text = render_report(_sample())
-        self.assertIn("AAPL — Score", text)
+        self.assertIn("AAPL — 3 von 8 Punkten", text)
 
 
 if __name__ == "__main__":

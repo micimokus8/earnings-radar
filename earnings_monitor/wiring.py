@@ -7,6 +7,7 @@ from pathlib import Path
 
 from earnings_monitor.pipeline import EarningsPipeline
 from earnings_monitor.alternative_sources import (
+    FinnhubEarningsHistoryClient,
     FinnhubForecastClient,
     FinnhubNewsClient,
     FinnhubQuoteClient,
@@ -222,6 +223,7 @@ def build_default_pipeline(
     finnhub_quotes = FinnhubQuoteClient(key=finnhub_key, timeout=timeout)
     finnhub_forecasts = FinnhubForecastClient(key=finnhub_key, timeout=timeout)
     finnhub_news = FinnhubNewsClient(key=finnhub_key, timeout=timeout)
+    finnhub_history = FinnhubEarningsHistoryClient(key=finnhub_key, timeout=timeout)
     twelvedata = TwelveDataTechnicalClient(
         key_path=twelvedata_key_path, timeout=timeout, outputsize=max(ohlcv_count, 60)
     )
@@ -282,6 +284,7 @@ def build_default_pipeline(
         short_interest=short_interest,
         insider=insider,
         dilution=dilution,
+        earnings_history=finnhub_history,
         throttle_seconds=throttle_seconds,
         symbol_timeout=90.0,
         symbol_resolver=resolver,

@@ -73,60 +73,54 @@ Die EW-Liste ist session-bewusst: BEFORE_OPEN scannt nur vor Börsenöffnung, AF
 
 ---
 
-## Scoring — Earnings-Hunt kalibriert
+## Scoring — Pump-Potenzial vor der Zahl
 
-Vier Kategorien, max **14 Punkte**. Ausrichtung: Post-Earnings-Pump-Potential (Bounce + Raum + Squeeze + Überraschung).
+Feste **8 Punkte**. Fehlende Daten geben 0 und verkleinern den Nenner nicht.
+Die Anzeige ist „3 von 8 Punkten“ plus die gemessene Häufigkeit dieses
+Technik-Stands. Das ist keine Gewinnchance.
 
-| Kategorie | Max | Earnings-Hunt Logik |
+| Kategorie | Max | Wann es Punkte gibt |
 |-----------|-----|---------------------|
-| **① Analyst Expectation** | 3 | Upside >30% (+1), EPS ≤0 → Surprise-Potential (+1), Rating Strong Buy/Buy (+1), Target gesenkt (+1). **N/A** wenn keine Coverage |
-| **② Short Interest** | 3 | DTC >3 (+1), >5 (+1); Short% >3% (+1), >8% (+1). Max 3. **N/A** bei Exchange ohne SI-Daten |
-| **③ Chart Confirmation** | 5 | **Bounce-Setup:** RSI<40 (+1), P<EMA20 (+1). **Raum nach oben:** >15% unterm 52W-Hoch (+1), >30% (+1). **Pre-Earnings-Schutz:** 5d-Change <+10% (+1) |
-| **④ News & SEC** | 3 | Keine neg. News (+1), kein Insider-Sell (+1), kein Dilution-Filing (+1) |
+| **① Raum** | 2 | Mindestens 8 % unter dem 52-Wochen-Hoch (+1). Nächster Pivot-Widerstand 3–15 % über dem Kurs (+1). |
+| **② Historie** | 2 | Mindestens 4 frühere Zahlen und Trefferquote der Schätzung ≥ 50 % (+1). Durchschnittliche Reaktion danach positiv (+1). Unbekannte Uhrzeit zählt nicht mit. |
+| **③ Revisionen** | 2 | Kauf-Anteil der Analysten um mindestens 5 Punkte gestiegen (+1). Kursziel um mindestens 2 % gestiegen (+1). Ein einzelner „Buy“ zählt nicht. |
+| **④ News** | 2 | Eine positive Schlagzeile (+1), zwei (+1). Schweigen gibt nichts. |
 
-### SKIP-Override (überschreibt Score)
+**Sperren** (kein Ranking, kein Grün): näher als 3 % am 52-Wochen-Hoch, RSI ≥ 75,
+Stochastik %K ≥ 90, schwere negative Schlagzeile (Betrug, Klage, Insolvenz,
+Untersuchung), gesenktes Kursziel oder klar gesunkener Kauf-Anteil.
 
-| Regel | Auslöser | Effect |
-|-------|----------|--------|
-| **EINGEPREIST** | `change_5d_pct ≥ 15%` UND `distance_to_52w > -10%` | 🔴 SKIP — Run-up zu nah am Hoch |
-| **OVERBOUGHT** | `RSI_1d > 75` | 🔴 SKIP — überkauft |
-| **POST_EARNINGS_CRASH** | `daily_change_pct ≤ -10%` | 🔴 SKIP — LULU-Fall |
+Grün gibt es nur, wenn ein Technik-Punktestand in der öffentlichen Nachrechnung
+auf beiden Horizonten klar besser war als die ganze Liste. Stand 3.11.2025
+bis 17.11.2026, 3.660 große Earnings-Namen: die Liste machte am Folgetag im
+Mittel +0,31 % und am Meldetag +0,28 %. Ein Technik-Punkt lag bei +0,34 % und
++0,40 %, der Folgetag also nur drei Hundertstel darüber. Zwei Punkte hatten
+mehr Ausschläge nach oben und mehr Verluste, der Mittelwert war nicht besser.
+**Deshalb ist nichts grün.** Die Häufigkeit steht trotzdem neben den Punkten.
 
-### Labels — auf erreichbare Punkte normalisiert
+Leerverkauf wird gezeigt, aber nicht bepunktet. Insider-„kein Verkauf“ und
+„keine Kapitalerhöhung“ geben keine Punkte. Stichworte in Schlagzeilen sind
+ganze Wörter: „commission“ ist kein „miss“.
 
-Eine Kategorie mit **state N/A** ist für das Symbol strukturell nicht messbar
-(Short Interest: nur Nasdaq-Listings; Analysten: kein Coverage). Diese Punkte
-zählen nicht gegen den Kandidaten — der Nenner schrumpft mit:
+### Labels
 
-`reachable_points = 14 − Summe(max_points aller N/A-Kategorien)`
-`score_pct = total_points / reachable_points × 100`
+| Punkte | Label | Anzeige |
+|--------|-------|---------|
+| Sperre | `SKIP (GRUND)` | nicht in der Medaillenliste |
+| mindestens 2, keine Sperre | `WATCH` | Beobachten, nicht grün |
+| Technik-Stand schlägt die Liste | `STRONG_SETUP` | grün; aktuell erreicht das niemand |
+| darunter | `SKIP` | schwach |
+| kein RSI oder kein 52-Wochen-Hoch | kein Label | unvollständig |
 
-Unsere eigenen Datenlücken (SEC offline, Kursziel 403, fehlende Kerzen) bleiben
-dagegen als fehlende Punkte stehen — ein blinder Prüfer darf das Urteil nicht
-aufwerten. Im Report steht deshalb z. B. `9/11 (82 %)` statt `9/14`.
+Die letzte Tageskerze zählt nur, wenn die New Yorker Kasse für diesen Tag
+schon geschlossen hat. Sonst bleiben RSI, Stochastik und das Hoch auf dem
+letzten fertigen Tag. Der Abstand wird mit dem aktuellen Kurs gerechnet.
 
-| Anteil | Label | Bedeutung |
-|--------|-------|-----------|
-| ≥ 71,4 % (≙ 10/14) | **STRONG_SETUP** 🟢🟢 | Earnings-Pump-Kandidat |
-| ≥ 42,9 % (≙ 6/14) | **WATCH** 🟢 | Potenzial, Review nötig |
-| darunter oder SKIP-Override | **SKIP** ⚪/🔴 | Schwach oder Risiko |
-| — | None | Core-Felder fehlen (INCOMPLETE) |
-
-Das Ranking sortiert nach `score_pct`, nicht nach Rohpunkten — sonst lägen
-NYSE-Werte systematisch 3 Punkte hinter Nasdaq-Werten.
-
-### Was der neue Score für AOUT/BBCP bedeutet
-
-**AOUT** (Pre-Earnings: $9.96, RSI 26.9, 52W $14.97):
-- Chart: RSI<40 (+1) + P<EMA20 (+1) + dist -33.5% (+2) + 5d +3% (+1) = **5/5**
-- Analyst: Upside 43.5% + EPS negativ + Strong Buy + Target gesenkt = **3/3**
-- Short: DTC 4.53 (+1) + Short% 1.62% (+0) = **1/3**
-- **Total: 10/14 → STRONG_SETUP** (vorher 7/14 WATCH) ✓
-
-**BBCP** (Pre-Earnings: $8.83, RSI 33.2, 52W $12.19):
-- Chart: RSI<40 (+1) + P<EMA20 (+1) + dist -27.6% (+1) + 5d +5% (+1) = **4/5**
-- Short: DTC 8.39 — new: >3 (+1) + >5 (+1) = **2/3** (vorher 1/3)
-- **Total: 9/14 → WATCH** (vorher 6/14) ✓
+Signale landen in `data/ledger/snapshots.jsonl` und `signals.jsonl`
+(Verzeichnis ist gitignored, Pfad über `EARNINGS_DATA_DIR` überschreibbar).
+`scripts/pump_ledger.py resolve` wertet die Sitzung aus.
+`scripts/pump_postmortem.py week` schreibt die gemessenen Quoten nach
+`data/ledger/lessons.md`, das der LLM-Lauf lädt.
 
 ---
 
@@ -134,19 +128,36 @@ NYSE-Werte systematisch 3 Punkte hinter Nasdaq-Werten.
 
 **Zwei Nachrichten pro Scan** (deterministischer Report + LLM Interpretation):
 
-| Cron-Job | Schedule (Mo–Fr) | Output |
-|----------|------------------|--------|
-| `earnings-before-open` | **09:30 UTC** | Deterministischer Report: Score, Kategorie-Details, Ranking |
-| `earnings-before-llm` | **09:45 UTC** | LLM Pump-Challenger Analyse |
-| `earnings-after-close` | **16:30 UTC** | Deterministischer Report |
-| `earnings-after-llm` | **16:45 UTC** | LLM Pump-Challenger Analyse |
+Ein Hermes-Job reicht, weil Winter- und Sommerzeit sich um eine Stunde verschieben:
+
+`*/15 16-20 * * 1-5` → `scripts/cron_stage.sh`
+
+Das ist 11:00–15:30 New York im Winter und 12:00–16:30 im Sommer. Das Skript
+schaut auf die Uhr in New York und macht nur zwei Dinge:
+
+| Fenster vor dem Kassenschluss | Was passiert |
+|-------------------------------|--------------|
+| etwa 1,5 bis 5 Stunden (Mittag) | Vorauswahl speichern. Keine Empfehlung. |
+| 25 bis 50 Minuten (Ziel 30–45) | Frische Kurse, RSI/Stochastik/Raum neu, Namen mit starkem Lauf seit dem Mittag raus. Nur das ist die Empfehlung. |
+| sonst, und an frühen Schlusstagen ausserhalb | Nichts, leere Ausgabe. |
+
+Nach Börsenschluss sind das die Namen, die heute Abend Zahlen bringen.
+Vor der Eröffnung sind es die Namen vom nächsten Morgen. Der Einstieg ist
+der Kurs dieser Schlusskontrolle, nicht ein späterer Schlusskurs.
+
+Schwellen stehen optional in `Freshness.txt` (`ran_pct=5`, `drop_pct=5`):
+mehr als 5 % seit dem Mittag gestiegen oder gefallen, dann Sperre.
+
+| Cron-Job | Wann | Output |
+|----------|------|--------|
+| `cron_stage.sh` | alle 15 Min, 16:00–20:30 UTC, Mo–Fr | Vorauswahl oder Empfehlung, je nach New-York-Uhr |
+| `earnings-resolve` | **23:30 UTC** Di–Sa | Auswertung ab dem Kurs der Schlusskontrolle |
 
 **Telegram-Format:**
-- Pro Symbol: Header (Emoji + Score + Label), 4 Kategorie-Zeilen, max **2 Headlines**
-- Chart-Zeile zeigt zusätzlich: `52W $14.97 (-33.50%)·5d 3.00%·1d -5.00%`
-- 🔴 bei SKIP-Override (EINGEPREIST, OVERBOUGHT, POST_EARNINGS_CRASH)
-- **Firmenname neben dem Ticker** (`CNC (Centene Corp)`) — Finnhub profile2
-- Ranking: Top 10 nach Score geordnet
+- Kopfzeile nennt die Sitzung und den Halt (vor der Eröffnung: Vortagsschluss bis Open/Close des Meldetags; nach Börsenschluss: Schluss bis Open/Close des Folgetags, Verkauf bei etwa +10 bis +20 %)
+- Pro Symbol: „X von 8 Punkten“, die gemessene Häufigkeit, vier Kategorien, max. 2 Schlagzeilen
+- Gesperrte Namen stehen nicht in der Rangliste
+- Firmenname neben dem Ticker (`CNC (Centene Corp)`) — Finnhub profile2
 - **Keine Kürzung mehr:** `max_chars` ist standardmäßig aus. Hermes splittet
   lange Reports selbst in so viele Telegram-Nachrichten wie nötig (`(1/3)`,
   `(1/4)`, …). `--max-chars N` bleibt als optionaler Hard-Cap.

@@ -25,6 +25,27 @@ class NewsTests(unittest.TestCase):
         result = evaluate_news([], as_of="2026-08-12T12:00:00+00:00")
         self.assertEqual(result["status"], "PASS")
 
+    def test_commission_is_not_a_miss(self):
+        result = evaluate_news(
+            headlines=[{"headline": "Senate commission permits the review", "published": "2026-08-10T12:00:00+00:00"}],
+            as_of="2026-08-12T12:00:00+00:00",
+        )
+        self.assertFalse(result["negative_news"])
+        self.assertIsNone(result["news_severity"])
+
+    def test_word_miss_is_negative_and_permission_is_not(self):
+        missed = evaluate_news(
+            headlines=[{"headline": "Company misses estimates", "published": "2026-08-10T12:00:00+00:00"}],
+            as_of="2026-08-12T12:00:00+00:00",
+        )
+        permission = evaluate_news(
+            headlines=[{"headline": "Company receives export permission", "published": "2026-08-10T12:00:00+00:00"}],
+            as_of="2026-08-12T12:00:00+00:00",
+        )
+        self.assertTrue(missed["negative_news"])
+        self.assertFalse(permission["negative_news"])
+        self.assertEqual(permission["positive_news_count"], 0)
+
     def test_failed_request_is_unknown(self):
         result = evaluate_news(None, as_of="2026-08-12T12:00:00+00:00")
         self.assertEqual(result["status"], "UNKNOWN")

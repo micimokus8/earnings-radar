@@ -11,15 +11,14 @@ import json
 import urllib.request
 
 _SYSTEM_PROMPT = (
-    "Du bist ein Earnings-Pump-Analyst. Du bekommst Kandidaten aus einem "
-    "deterministischen Scanner (0-14 Punkte, 4 Kategorien) PLUS Earnings-Hunt-"
-    "Metriken (52W-Hoch, Abstand zum Hoch, 5-Tages-Change, Daily-Change, DTC). "
-    "Dein Ziel: Bewerte das PUMP-POTENTIAL nach Earnings. Regeln: "
-    "Interpretiere AUSSCHLIESSLICH die gelieferten Werte; erfinde keine Zahlen; "
-    "ändere keine Punkte oder Labels. Fokus: Ist der Kandidat vor Earnings "
-    "überverkauft mit viel Luft nach oben (Bounce-Katalysator) oder schon "
-    "eingepreist (Run-up)? Short-Squeeze-Potential? Analysten-Surprise? "
-    "Kein finanzieller Rat. Antworte auf Deutsch, nüchtern, kompakt."
+    "Du bist ein Earnings-Pump-Analyst. Die Punkte sind eine Checkliste für "
+    "Pump-Potenzial VOR der Gewinnzahl: Raum bis zum nächsten Widerstand, "
+    "nicht erschöpft, positive Schlagzeilen, frühere Reaktionen, aktuelle "
+    "Revisionen. Die Punktzahl ist keine Wahrscheinlichkeit. Gesperrte Namen "
+    "(nahe am 52-Wochen-Hoch, RSI ab 75, Stochastik ab 90, schwere negative "
+    "News, gesenkte Erwartung) sind keine Käufe. Interpretiere nur die "
+    "gelieferten Werte. Erfinde keine Zahlen. Ändere keine Punkte oder Labels. "
+    "Kein finanzieller Rat. Deutsch, nüchtern, kompakt."
 )
 
 _DEUTUNG_MARKER = "DEUTUNG:"
@@ -34,8 +33,9 @@ def _candidate_block(candidate: dict) -> str:
     top_headline = candidate.get("top_headline")
     lines = [
         f"Symbol: {candidate.get('symbol')}",
-        f"Label/Score: {score.get('label')} ({score.get('total_points', 0)}/"
-        f"{score.get('reachable_points', 14)} = {score.get('score_pct', 0):.0f}%)",
+        f"Punkte: {score.get('total_points', 0)} von {score.get('max_points', 8)} "
+        f"(Technik {score.get('technical_points', 0)} von 4). Label: {score.get('label')}.",
+        f"Messung: {score.get('frequency_note') or 'keine'}",
         f"Skip-Reason: {score.get('skip_reason', 'keine')}",
         f"Earnings: {calendar.get('earnings_date')} ({calendar.get('earnings_timing')})",
         # Earnings-Hunt key metrics
@@ -71,7 +71,8 @@ def build_prompt(candidates: list[dict], lessons: str | None = None) -> str:
             f"{lessons.strip()}\n"
         )
     return (
-        "Kandidaten des heutigen Earnings-Scans (deterministisch, Skala 0-14):\n\n"
+        "Kandidaten des heutigen Earnings-Scans (Checkliste, höchstens 8 Punkte, "
+        "keine Gewinnchance):\n\n"
         f"{blocks}{lesson_block}\n\n"
         "Liefere jetzt pro Kandidat eine PUMP-ANALYSE und am Ende ein "
         "Gesamt-Ranking nach PUMP-POTENTIAL (nicht nach Score). Top 3 Kandidaten "

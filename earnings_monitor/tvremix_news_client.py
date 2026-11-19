@@ -62,6 +62,8 @@ class TvremixNewsClient:
             "status": "PASS",
             "headlines": headlines,
             "negative_news": evaluation["negative_news"],
+            "news_severity": evaluation.get("news_severity"),
+            "positive_news_count": evaluation.get("positive_news_count"),
             "matches": evaluation.get("matches", []),
         }
 

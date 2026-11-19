@@ -106,9 +106,8 @@ class SecOrchestrationTests(unittest.TestCase):
         self.assertEqual(
             candidate_sources["dilution_status"], "CONFIRMED_DILUTION"
         )
-        news_sec = candidate["score"]["categories"]["news_and_sec"]
-        self.assertEqual(news_sec["points"], 2)
-        self.assertEqual(news_sec["state"], "PASS")
+        self.assertNotIn("news_and_sec", candidate["score"]["categories"])
+        self.assertEqual(candidate["score"]["categories"]["news"]["points"], 0)
 
 
 if __name__ == "__main__":

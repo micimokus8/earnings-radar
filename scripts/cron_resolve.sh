@@ -2,7 +2,8 @@
 # Pump-Ledger Pipeline: holt nach US-Close die Schlusskurse, verbucht
 # PUMP/FLAT/REINFALL und laesst direkt danach das LLM-Postmortem laufen
 # (war die Vorab-These bestaetigt/widerlegt + Zuender + Lesson).
-# Laeuft taeglich 00:20 lokal (Di-Sa frueh).
+# Nach dem US-Schluss, damit der Folgetag für AFTER_CLOSE schon einen Schluss hat.
+# Hermes-Cron: 30 23 * * 2-6  (23:30 UTC = 18:30 EST / 19:30 EDT, Di–Sa).
 set -u
 cd /root/.hermes/workspace/earnings-monitor || exit 1
 export PYTHONPATH=.
