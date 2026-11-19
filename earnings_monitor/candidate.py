@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from earnings_monitor.earnings_history import summarize_earnings_history
 from earnings_monitor.scoring import score_candidate
 
 
@@ -21,6 +22,7 @@ def build_candidate(
     short_interest: dict | None = None,
     insider_status: str = "UNKNOWN",
     dilution_status: str = "UNKNOWN",
+    earnings_history: dict | None = None,
 ) -> dict:
     calendar = calendar or {}
     quote = quote or {}
@@ -56,7 +58,17 @@ def build_candidate(
         "negative_news": news.get("negative_news"),
         "insider_status": insider_status,
         "dilution_status": dilution_status,
+        "news_severity": news.get("news_severity"),
+        "positive_news_count": news.get("positive_news_count"),
+        "analyst_revision": forecast_row.get("analyst_revision"),
+        "target_revision": forecast_row.get("target_revision"),
     }
+    history = summarize_earnings_history(
+        (earnings_history or {}).get("events") if isinstance(earnings_history, dict) else None,
+        technicals.get("daily_bars") if isinstance(technicals, dict) else None,
+        as_of=as_of,
+    )
+    values.update(history)
     for k in ("high_52w", "recent_high_60d", "daily_change_pct",
               "change_5d_pct", "distance_to_52w_pct"):
         values.setdefault(k, None)
@@ -66,7 +78,8 @@ def build_candidate(
             "price_1d", "price_4h", "ema20_1d", "ema20_4h", "ema50_1d",
             "rsi_1d", "adx_1d", "macd_1d", "macd_signal_1d", "macd_histogram_1d",
             "high_52w", "recent_high_60d", "daily_change_pct", "change_5d_pct",
-            "distance_to_52w_pct",
+            "distance_to_52w_pct", "stoch_k_1d", "atr_14", "resistance_price",
+            "room_to_resistance_pct",
         )
     })
     # Persist real provider headlines so telegram + LLM can display them.

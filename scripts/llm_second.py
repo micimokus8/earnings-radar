@@ -15,6 +15,8 @@ import sys
 from datetime import datetime, timezone
 
 from earnings_monitor.llm_interpretation import interpret_candidates
+from earnings_monitor.paths import ledger_dir
+from earnings_monitor.schedule import plan_scan
 from earnings_monitor.wiring import load_optional_text
 
 
@@ -44,7 +46,7 @@ def main() -> int:
     if not enabled:
         return 0
 
-    report_date = args.report_date or datetime.now().strftime("%Y-%m-%d")
+    report_date = args.report_date or plan_scan(args.report_type).target_date
     out_dir = pathlib.Path(args.out_dir)
     path = out_dir / f"{report_date}_{args.report_type}.json"
     if not path.exists():
@@ -64,7 +66,7 @@ def main() -> int:
         return 0
 
     model = load_optional_text(args.llm_model_file) or args.llm_model
-    lessons_path = pathlib.Path("data/ledger/lessons.md")
+    lessons_path = ledger_dir() / "lessons.md"
     lessons = lessons_path.read_text(encoding="utf-8") if lessons_path.exists() else None
     result = interpret_candidates(
         labelled, api_key=api_key, base_url=args.llm_base_url, model=model,
@@ -80,7 +82,8 @@ def main() -> int:
         return 1
 
     lines = [
-        f"🤖 LLM-Bewertung ({model}) — {args.report_type.replace('_', ' ')} {report_date}",
+        f"LLM-Bewertung ({model}) — {args.report_type.replace('_', ' ')} {report_date}",
+        report.get("horizon") or "",
         "",
     ]
     for c in labelled:

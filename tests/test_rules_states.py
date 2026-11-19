@@ -35,39 +35,32 @@ class RuleStateTests(unittest.TestCase):
         self.assertEqual(result["state"], "PASS")
         self.assertEqual(result["points"], 2)
 
-    def test_missing_short_interest_blocks_final_recommendation(self):
+    def test_missing_chart_blocks_final_recommendation(self):
         result = evaluate_core_completeness({
-            "price": 100,
-            "eps_estimate": 1.2,
-            "ohlcv_1d": "present",
-            "market_cap": 1_000_000,
+            "price_1d": 100,
+            "rsi_1d": None,
+            "high_52w": 120,
             "short_pct_outstanding": None,
-            "days_to_cover": 2.1,
         })
         self.assertEqual(result["state"], "INCOMPLETE")
         self.assertFalse(result["final_recommendation_allowed"])
-        self.assertIn("short_pct_outstanding", result["missing"])
+        self.assertIn("rsi_1d", result["missing"])
+        self.assertNotIn("short_pct_outstanding", result["missing"])
 
     def test_complete_core_values_allow_final_recommendation(self):
         result = evaluate_core_completeness({
-            "price": 100,
-            "eps_estimate": 1.2,
-            "ohlcv_1d": "present",
-            "market_cap": 1_000_000,
-            "short_pct_outstanding": 12.0,
-            "days_to_cover": 2.1,
+            "price_1d": 100,
+            "rsi_1d": 50,
+            "high_52w": 120,
         })
         self.assertEqual(result["state"], "COMPLETE")
         self.assertTrue(result["final_recommendation_allowed"])
 
     def test_unsupported_short_interest_does_not_block_completeness(self):
-        # NYSE symbols have no Nasdaq short-interest source; their missing SI
-        # fields must not disqualify the candidate as INCOMPLETE.
         result = evaluate_core_completeness({
-            "price": 100,
-            "eps_estimate": 1.2,
-            "ohlcv_1d": "present",
-            "market_cap": 1_000_000,
+            "price_1d": 100,
+            "rsi_1d": 50,
+            "high_52w": 120,
             "short_pct_outstanding": None,
             "days_to_cover": None,
             "short_interest_supported": False,

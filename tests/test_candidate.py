@@ -42,7 +42,8 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(result["status"], "INCOMPLETE")
         self.assertEqual(result["score"]["state"], "INCOMPLETE")
         self.assertIsNone(result["score"]["label"])
-        self.assertIn("short_pct_outstanding", result["score"]["missing"])
+        self.assertIn("high_52w", result["score"]["missing"])
+        self.assertNotIn("short_pct_outstanding", result["score"]["missing"])
         self.assertEqual(result["values"]["market_cap"], 3_000_000_000)
         self.assertEqual(result["sources"]["quote"]["status"], "PASS")
 
@@ -71,7 +72,8 @@ class CandidateTests(unittest.TestCase):
                 "eps_estimate": 1.5, "target_upside_pct": 11.0, "target_recently_cut": False}},
             technicals={"status": "PASS", "values": {
                 "price_1d": 355.0, "price_4h": 355.0, "ema20_1d": 359.0, "ema20_4h": 359.0,
-                "ema50_1d": 350.0, "rsi_1d": 47.0, "adx_1d": 24.0}},
+                "ema50_1d": 350.0, "rsi_1d": 47.0, "adx_1d": 24.0,
+                "high_52w": 420.0, "stoch_k_1d": 40.0, "resistance_price": 380.0}},
             news={"status": "PASS", "negative_news": False},
             short_interest={"status": "N/A", "exchange_unsupported": True,
                             "short_pct_outstanding": None, "days_to_cover": None},
@@ -80,6 +82,7 @@ class CandidateTests(unittest.TestCase):
         )
         self.assertNotEqual(result["status"], "INCOMPLETE")
         self.assertNotIn("short_pct_outstanding", result["score"]["missing"])
+        self.assertEqual(result["score"]["reachable_points"], 8)
         self.assertFalse(result["values"]["short_interest_supported"])
 
 

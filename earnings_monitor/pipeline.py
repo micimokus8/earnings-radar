@@ -6,6 +6,35 @@ import time
 
 from earnings_monitor.candidate import build_candidate
 from earnings_monitor.dedup import dedupe_dual_class_symbols
+from earnings_monitor.forecast_target_pipeline import evaluate_target_change
+from earnings_monitor.paths import ledger_dir
+
+
+def _apply_target_revision(symbol: str, forecast: dict, as_of: str) -> None:
+    """Compare the live target with the last snapshot. A cut is not a plus."""
+    row = forecast.get("forecast")
+    if not isinstance(row, dict):
+        return
+    average = row.get("target_average")
+    if not isinstance(average, (int, float)):
+        return
+    change = evaluate_target_change(
+        store_path=ledger_dir() / "target_snapshots.json",
+        symbol=symbol,
+        forecast={"price_targets": {"average": average}},
+        as_of=as_of,
+    )
+    row["target_change_pct"] = change.get("change_pct")
+    if change.get("status") != "PASS":
+        return
+    if change.get("cut"):
+        row["target_recently_cut"] = True
+        row["target_revision"] = "down"
+    elif isinstance(change.get("change_pct"), (int, float)) and change["change_pct"] >= 2:
+        row["target_recently_cut"] = False
+        row["target_revision"] = "up"
+    else:
+        row["target_recently_cut"] = False
 
 
 class EarningsPipeline:
@@ -22,6 +51,7 @@ class EarningsPipeline:
         short_interest,
         insider=None,
         dilution=None,
+        earnings_history=None,
         retries: int = 2,
         backoff_seconds: float = 0.75,
         sleep=time.sleep,
@@ -37,6 +67,7 @@ class EarningsPipeline:
         self.short_interest = short_interest
         self.insider = insider
         self.dilution = dilution
+        self.earnings_history = earnings_history
         self.retries = max(0, int(retries))
         self.backoff_seconds = max(0.0, float(backoff_seconds))
         self._sleep = sleep
@@ -140,8 +171,11 @@ class EarningsPipeline:
                 news = self._call(self.news, symbol, as_of=as_of)
                 insider = self._call(self.insider, symbol, as_of) if self.insider else "UNKNOWN"
                 dilution = self._call(self.dilution, symbol, as_of) if self.dilution else "UNKNOWN"
+                history = self._call(self.earnings_history, symbol, as_of=as_of) if self.earnings_history else None
                 insider_status = insider.get("status", "UNKNOWN") if isinstance(insider, dict) else insider
                 dilution_status = dilution.get("status", "UNKNOWN") if isinstance(dilution, dict) else dilution
+                if isinstance(forecast, dict) and isinstance(forecast.get("forecast"), dict):
+                    _apply_target_revision(symbol, forecast, as_of)
                 candidate = build_candidate(
                     symbol=symbol,
                     as_of=as_of,
@@ -153,6 +187,7 @@ class EarningsPipeline:
                     short_interest=short_interest,
                     insider_status=insider_status,
                     dilution_status=dilution_status,
+                    earnings_history=history if isinstance(history, dict) else None,
                 )
                 candidates.append(candidate)
                 self._candidates_built += 1

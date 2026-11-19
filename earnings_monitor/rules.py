@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 
-_CORE_FIELDS = ("price", "eps_estimate", "ohlcv_1d", "market_cap", "short_pct_outstanding", "days_to_cover")
+# A recommendation needs a finished chart: last close, RSI, and the 52-week high.
+# Short interest, EPS and market cap are context. Missing them must not hide
+# the name and must not shrink the score denominator.
+_CORE_FIELDS = ("price_1d", "rsi_1d", "high_52w")
 
 
 def evaluate_news_sec(*, news_status, negative_news, insider_status, dilution_status):
@@ -25,12 +28,6 @@ def evaluate_news_sec(*, news_status, negative_news, insider_status, dilution_st
 
 def evaluate_core_completeness(values):
     missing = [name for name in _CORE_FIELDS if values.get(name) is None]
-    # Short-interest is only available for Nasdaq-listed symbols. When it is
-    # structurally unsupported (e.g. NYSE), treat its core fields as satisfied so
-    # the candidate is not unfairly disqualified as INCOMPLETE.
-    if values.get("short_interest_supported") is False:
-        missing = [name for name in missing
-                   if name not in ("short_pct_outstanding", "days_to_cover")]
     return {
         "state": "INCOMPLETE" if missing else "COMPLETE",
         "missing": missing,

@@ -11,6 +11,7 @@ FMP Key.txt
 # --- Logs/Artefakte/State ---
 data/reports/
 data/snapshots/
+data/ledger/
 *.log
 stderr.txt
 

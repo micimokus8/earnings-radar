@@ -7,10 +7,28 @@ and appended, never merged into the score.
 
 from __future__ import annotations
 
-_EMO = {"STRONG_SETUP": "🟢🟢", "WATCH": "🟢", "SKIP": "⚪", "SKIP (EINGEPREIST)": "🔴", "SKIP (OVERBOUGHT)": "🔴", "SKIP (POST_EARNINGS_CRASH)": "🔴"}
-_LABEL_DE = {"STRONG_SETUP": "STARKES Setup", "WATCH": "Beobachten", "SKIP": "SKIP",
-             "SKIP (EINGEPREIST)": "⚠ EINGEPREIST", "SKIP (OVERBOUGHT)": "⚠ OVERBOUGHT",
-             "SKIP (POST_EARNINGS_CRASH)": "⚠ POST-EARNINGS CRASH"}
+_EMO = {"STRONG_SETUP": "🟢", "WATCH": "·", "SKIP": "⚪"}
+_LABEL_DE = {
+    "STRONG_SETUP": "Grün: historisch besser als die Liste",
+    "WATCH": "Beobachten, nicht grün",
+    "SKIP": "schwach",
+}
+
+
+def _default_horizon(report_type: str) -> str:
+    if report_type == "AFTER_CLOSE":
+        return (
+            "Sitzung: Zahlen nach US-Schluss. Empfehlung 30–45 Minuten vor 16:00 New York. "
+            "Einstieg ist der Kurs dieser Kontrolle. "
+            "Halten bis zum nächsten Handelstag, Verkauf bei etwa +10 bis +20 %. "
+            "Messung: dieser Kurs → Open und Close des Folgetags."
+        )
+    return (
+        "Sitzung: Zahlen vor der Eröffnung. Empfehlung kurz vor dem Schluss des Vortags. "
+        "Einstieg ist der Kurs dieser Kontrolle. "
+        "Halten bis zum Meldetag, Verkauf bei etwa +10 bis +20 %. "
+        "Messung: dieser Kurs → Open und Close des Meldetags."
+    )
 
 
 def _ticker(symbol: str) -> str:
@@ -40,34 +58,47 @@ def _num(value, suffix="", digits=2):
 
 
 def _score_text(score: dict) -> str:
-    """'9/11 (82 %)'. Nenner = erreichbare Punkte, nicht pauschal 14."""
+    """'3 von 8 Punkten'. Die Prozentzahl ist keine Gewinnchance."""
     total = score.get("total_points", 0) or 0
-    reachable = score.get("reachable_points") or score.get("max_points", 14)
-    pct = score.get("score_pct")
-    if pct is None:
-        pct = round(total / reachable * 100, 1) if reachable else 0.0
-    return f"{total}/{reachable} ({pct:.0f} %)"
+    reachable = score.get("max_points") or score.get("reachable_points") or 8
+    return f"{total} von {reachable} Punkten"
+
+
+def _label_text(score: dict) -> str:
+    lab = score.get("label")
+    if not lab:
+        return "unvollständig"
+    if lab in _LABEL_DE:
+        return _LABEL_DE[lab]
+    if str(lab).startswith("SKIP ("):
+        reason = str(lab)[len("SKIP ("):-1] if str(lab).endswith(")") else str(lab)
+        return f"Sperre: {reason.replace('_', ' ').replace('+', ', ')}"
+    return str(lab)
 
 
 def _candidate_header(candidate: dict, total: int, maxp: int) -> str:
     score = candidate.get("score") or {}
     lab = score.get("label")
-    emoji = _EMO.get(lab, "◯")
+    emoji = _EMO.get(lab, "◯") if lab in _EMO or not lab else "⚪"
+    if lab and str(lab).startswith("SKIP"):
+        emoji = "⚪"
     name = _display(candidate)
     text = _score_text(score)
-    if lab:
-        return f"{emoji} {name} — Score: {text} — {_LABEL_DE.get(lab, lab)}"
-    return f"{emoji} {name} — Score: {text} — ⚠ unvollständig"
+    note = score.get("frequency_note") or ""
+    line = f"{emoji} {name} — {text} — {_label_text(score)}"
+    if note:
+        line += f"\n    {note}"
+    return line
 
 
 def _candidate_rows(candidate: dict) -> list[str]:
     v = candidate.get("values", {})
     s = candidate.get("score", {})
     cats = s.get("categories", {})
-    a_pts = (cats.get("analyst_expectation") or {}).get("points", 0)
-    si_pts = (cats.get("short_interest") or {}).get("points", 0)
-    ch_pts = (cats.get("chart_confirmation") or {}).get("points", 0)
-    nw_pts = (cats.get("news_and_sec") or {}).get("points", 0)
+    room_pts = (cats.get("room") or {}).get("points", 0)
+    hist_pts = (cats.get("history") or {}).get("points", 0)
+    rev_pts = (cats.get("revisions") or {}).get("points", 0)
+    news_pts = (cats.get("news") or {}).get("points", 0)
 
     eps = _num(v.get("eps_estimate"))
     upside = _num(v.get("target_upside_pct"), "%")
@@ -181,13 +212,26 @@ def _candidate_rows(candidate: dict) -> list[str]:
             if len(short) > 120:
                 short = short[:117] + "…"
             headline_lines.append(f'    • “{short}”')
+    beat = v.get("beat_rate")
+    beat_txt = "n/a" if beat is None else f"{float(beat) * 100:.0f}% ({v.get('beat_n') or 0} Zahlen)"
+    hist = v.get("hist_reaction_pct")
+    hist_txt = "n/a" if hist is None else f"{_num(hist, '%')} im Schnitt ({v.get('hist_n') or 0})"
+    room = s.get("room_to_resistance_pct", v.get("room_to_resistance_pct"))
+    dist = s.get("distance_to_52w_pct", v.get("distance_to_52w_pct"))
+    stoch = v.get("stoch_k_1d")
+    revision = v.get("analyst_revision") or "keine"
+    target_rev = v.get("target_revision") or ("gesenkt" if cut is True else "keine")
+    positive = v.get("positive_news_count")
+    pos_txt = "n/a" if positive is None else str(positive)
     return [
-        f"| ① Analysten | {analyst_txt} | +{a_pts} |",
-        f"| ② Short     | {short_txt} | +{si_pts} |",
-        f"| ③ Chart     | {chart_price_txt} | +{ch_pts} |",
-        f"|             | {chart_trend_txt} |",
+        f"| ① Raum      | Abstand 52W {_num(dist, '%')} · bis Widerstand {_num(room, '%')} | +{room_pts} |",
+        f"|             | {chart_price_txt} |",
+        f"|             | {chart_trend_txt} · Stoch {_num(stoch, digits=0)} |",
         f"|             | {chart_momentum_txt} |",
-        f"| ④ News/SEC  | {news_txt} | +{nw_pts} |",
+        f"| ② Historie  | Schlägt Schätzung {beat_txt} · Reaktion {hist_txt} | +{hist_pts} |",
+        f"| ③ Revision  | Analysten {revision} · Kursziel {target_rev} · {analyst_txt} | +{rev_pts} |",
+        f"| ④ News      | positive Schlagzeilen {pos_txt} · {news_txt} | +{news_pts} |",
+        f"|             | {short_txt} (nur Kontext, keine Punkte) |",
     ] + headline_lines
 
 
@@ -204,7 +248,13 @@ def render_report(
     rdate = report["report_date"]
     truncated = bool((report.get("quality") or {}).get("truncated", False))
     lost = (report.get("quality") or {}).get("lost_symbols") or []
-    header_line = f"📊 {rtype.replace('_', ' ')} — Earnings {rdate}"
+    horizon = report.get("horizon") or _default_horizon(rtype)
+    header_line = f"{rtype.replace('_', ' ')} — Earnings {rdate}"
+    if report.get("priced_at_text"):
+        header_line += f"\n{report['priced_at_text']}"
+    header_line += f"\n{horizon}"
+    if report.get("stage") == "final" and report.get("preselect_found") is False:
+        header_line += "\nKeine Mittagsauswahl gefunden. Der Lauf seit dem Mittag wurde nicht geprüft."
     if lost:
         header_line += " · ⚠️ Verlorene Symbole: " + ", ".join(
             s.split(":")[-1] for s in lost[:6]
@@ -225,22 +275,38 @@ def render_report(
             lines.append("Deutung: — (Daten unvollständig)")
         lines.append("")
 
-    lines.append("📊 RANKING")
+    lines.append("Rangliste (gesperrte Namen ohne Medaille)")
     ranked = sorted(
         report["candidates"],
         key=lambda c: (
-            -((c.get("score") or {}).get("score_pct") or 0),
             -((c.get("score") or {}).get("total_points", 0) or 0),
+            -((c.get("score") or {}).get("technical_points", 0) or 0),
             _ticker(c.get("symbol", "?")).upper(),
         ),
     )
-    for i, c in enumerate(ranked[:10], 1):
+
+    def _blocked(candidate: dict) -> bool:
+        score = candidate.get("score") or {}
+        if score.get("blocked"):
+            return True
+        label = str(score.get("label") or "")
+        return label.startswith("SKIP (")
+
+    eligible = [c for c in ranked if not _blocked(c) and (c.get("score") or {}).get("label") in {"STRONG_SETUP", "WATCH"}]
+    blocked = [c for c in ranked if _blocked(c)]
+    if not eligible:
+        lines.append("• Keine handelbare Idee. Niemand hat die grüne Schwelle erreicht.")
+    for i, c in enumerate(eligible[:10], 1):
         ticker = _display(c)
         score = c.get("score") or {}
-        raw_label = score.get("label")
-        label = _LABEL_DE.get(raw_label, "unvollständig") if raw_label else "unvollständig"
-        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
-        lines.append(f"• {medal} {ticker} — {_score_text(score)} — {label}")
+        medal = {1: "1.", 2: "2.", 3: "3."}.get(i, f"{i}.")
+        lines.append(f"• {medal} {ticker} — {_score_text(score)} — {_label_text(score)}")
+    if blocked:
+        names = ", ".join(_ticker(c.get("symbol", "?")) for c in blocked[:8])
+        lines.append(f"Gesperrt, nicht gerankt: {names}")
+    drops = report.get("drift_drops") or []
+    if drops:
+        lines.append("Seit der Vorauswahl raus (Kurs schon gelaufen oder scharf gefallen): " + ", ".join(drops))
 
     if empfehlung:
         lines.append("")

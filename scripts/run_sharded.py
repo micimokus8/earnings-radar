@@ -23,8 +23,19 @@ import tempfile
 import time
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from earnings_monitor.dedup import dedupe_dual_class_symbols
+from earnings_monitor.freshness import (
+    apply_freshness,
+    format_priced_at,
+    load_preselect,
+    load_thresholds,
+    save_preselect,
+)
 from earnings_monitor.report_builder import merge_reports
+from earnings_monitor.schedule import plan_scan, stage_for
+from earnings_monitor.signal_log import record_report
 from earnings_monitor.telegram_report import render_report
 from earnings_monitor.llm_interpretation import interpret_candidates
 
@@ -210,7 +221,29 @@ def main() -> int:
     parser.add_argument("--llm-base-url", default="https://openrouter.ai/api/v1")
     parser.add_argument("--no-llm", action="store_true",
                         help="LLM-Interpretation fuer diesen Lauf deaktivieren")
+    parser.add_argument("--force", action="store_true",
+                        help="Auch nach US-Schluss einen AFTER_CLOSE-Lauf erlauben")
+    parser.add_argument("--stage", default="final", choices=["auto", "preselect", "final"],
+                        help="auto folgt der New-York-Uhr. Nur final schickt die Empfehlung.")
+    parser.add_argument("--ran-pct", type=float, default=None,
+                        help="Seit der Vorauswahl mehr als so viel Prozent gestiegen: raus")
+    parser.add_argument("--drop-pct", type=float, default=None,
+                        help="Seit der Vorauswahl mehr als so viel Prozent gefallen: raus")
     args = parser.parse_args()
+
+    plan = plan_scan(args.report_type)
+    if not args.target_date:
+        args.target_date = plan.target_date
+    if args.stage == "auto":
+        clock = stage_for(args.report_type)
+        if clock in {"idle", "closed"}:
+            if clock == "closed":
+                sys.stderr.write((plan.blocked_reason or "Ausserhalb des Fensters.") + "\n")
+            return 0
+        args.stage = clock
+    if args.report_type == "AFTER_CLOSE" and not plan.entry_open and not args.force:
+        sys.stderr.write(plan.blocked_reason + "\n")
+        return 0
 
     # ── discovery (bounded by separate timeout, not shrinking) ──────────
     t_start = time.monotonic()
@@ -258,6 +291,7 @@ def main() -> int:
         procs.append(_run(args, [
             "--symbols", ",".join(chunk),
             "--report-type", args.report_type,
+            "--report-date", args.target_date or "",
             "--as-of", args.as_of or "",
             "--out-file", str(shard_path),
             "--deadline-seconds", str(chunk_deadline),
@@ -320,6 +354,7 @@ def main() -> int:
                 rescue_procs.append(_run(args, [
                     "--symbols", sym,
                     "--report-type", args.report_type,
+                    "--report-date", args.target_date or "",
                     "--as-of", args.as_of or "",
                     "--out-file", str(rescue_path),
                     "--deadline-seconds", str(rescue_timeout),
@@ -355,12 +390,49 @@ def main() -> int:
     total_elapsed = time.monotonic() - t_start
     quality = merged["quality"]
 
-    # ── write & render ─────────────────────────────────────────────────
+    # ── freshness, then write. Only the final stage is a recommendation. ─
+    now = datetime.now(timezone.utc)
+    merged["horizon"] = f"{plan.headline} {plan.horizon}"
+    merged["stage"] = args.stage
+    merged["priced_at"] = now.isoformat()
+    merged["priced_at_text"] = format_priced_at(now)
+    if args.stage == "final":
+        ran, drop = load_thresholds()
+        if args.ran_pct is not None:
+            ran = args.ran_pct
+        if args.drop_pct is not None:
+            drop = args.drop_pct
+        prior = load_preselect(merged.get("report_date", ""), args.report_type)
+        refreshed = []
+        dropped = []
+        for candidate in merged.get("candidates") or []:
+            symbol = str(candidate.get("symbol", "")).split(":")[-1].strip().upper()
+            updated = apply_freshness(candidate, prior.get(symbol), ran, drop)
+            refreshed.append(updated)
+            if updated.get("drift_pct") is not None and (updated.get("score") or {}).get("blocked"):
+                if "SCHON_GELAUFEN" in str((updated.get("score") or {}).get("skip_reason")) or \
+                   "SCHARFER_RUECKGANG" in str((updated.get("score") or {}).get("skip_reason")):
+                    dropped.append(f"{symbol} {updated['drift_pct']:+.1f}%")
+        merged["candidates"] = refreshed
+        merged["drift_drops"] = dropped
+        merged["preselect_found"] = bool(prior)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_id = merged["report_id"].replace(":", "_")
     out_path = out_dir / f"{safe_id}.json"
     out_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    if args.stage == "preselect":
+        path = save_preselect(merged, priced_at=merged["priced_at"])
+        sys.stderr.write(
+            f"[vorauswahl] {len((merged.get('candidates') or []))} Namen, "
+            f"noch keine Empfehlung. {path}\n"
+        )
+        return 0
+    try:
+        added = record_report(merged)
+        sys.stderr.write(f"[ledger] {added} neue Signale\n")
+    except Exception as exc:
+        sys.stderr.write(f"[ledger] Signal konnte nicht gespeichert werden: {exc}\n")
 
     # ── LLM-Interpretation: EIN Call auf dem gemergten Report ───────────
     # Vorher lief sie in run_scan.py pro Chunk — und deren stdout geht ins

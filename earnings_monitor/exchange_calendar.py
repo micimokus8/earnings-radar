@@ -86,6 +86,37 @@ def trading_sessions(start_date: date, end_date: date) -> list[date]:
     return sessions
 
 
+def is_trading_day(day: date) -> bool:
+    return bool(trading_sessions(day, day))
+
+
+def session_close(day: date) -> datetime | None:
+    """Cash-session close in America/New_York, or None if *day* is not a session."""
+    if not is_trading_day(day):
+        return None
+    early = day in early_close_dates(day.year)
+    close_at = _EARLY_CLOSE if early else _REGULAR_CLOSE
+    return datetime.combine(day, close_at, tzinfo=_ET)
+
+
+def next_trading_day(day: date) -> date:
+    cursor = day + timedelta(days=1)
+    for _ in range(14):
+        if is_trading_day(cursor):
+            return cursor
+        cursor += timedelta(days=1)
+    return cursor
+
+
+def previous_trading_day(day: date) -> date:
+    cursor = day - timedelta(days=1)
+    for _ in range(14):
+        if is_trading_day(cursor):
+            return cursor
+        cursor -= timedelta(days=1)
+    return cursor
+
+
 def completed_sessions_before(now_utc: datetime, *, lookback_days: int = 10) -> list[date]:
     now_utc = now_utc.astimezone(timezone.utc)
     start = (now_utc + timedelta(days=1)).date() - timedelta(days=lookback_days)
@@ -107,6 +138,10 @@ __all__ = [
     "early_close_dates",
     "trading_sessions",
     "completed_sessions_before",
+    "is_trading_day",
+    "session_close",
+    "next_trading_day",
+    "previous_trading_day",
 ]
 
       

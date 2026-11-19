@@ -140,6 +140,75 @@ def change_pct(bars, lookback: int = 5):
     return (last - old) / old * 100.0
 
 
+def stochastic_k(bars, period: int = 14):
+    """Latest raw stochastic %K. 100 means the close is at the period high."""
+    if period <= 0 or not bars or len(bars) < period:
+        return None
+    window = bars[-period:]
+    try:
+        highest = max(float(bar["h"]) for bar in window)
+        lowest = min(float(bar["l"]) for bar in window)
+        close = float(bars[-1]["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if highest == lowest:
+        return 50.0
+    return (close - lowest) / (highest - lowest) * 100.0
+
+
+def average_true_range(bars, period: int = 14):
+    if period <= 0 or not bars or len(bars) < period + 1:
+        return None
+    true_ranges = []
+    for index in range(1, len(bars)):
+        try:
+            high = float(bars[index]["h"])
+            low = float(bars[index]["l"])
+            prev = float(bars[index - 1]["c"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        true_ranges.append(max(high - low, abs(high - prev), abs(low - prev)))
+    if len(true_ranges) < period:
+        return None
+    return sum(true_ranges[-period:]) / period
+
+
+def next_resistance(bars, *, pivot_lookback: int = 80):
+    """Nearest pivot high above the last close, else the 52-week high if it is above.
+
+    A pivot high is higher than the two bars on each side. That is the next
+    meaningful ceiling, not every uptick.
+    """
+    if not bars:
+        return None
+    try:
+        price = float(bars[-1]["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    window = bars[-pivot_lookback:]
+    pivots = []
+    if len(window) >= 5:
+        for index in range(2, len(window) - 2):
+            try:
+                high = float(window[index]["h"])
+                neighbors = [
+                    float(window[index - 2]["h"]),
+                    float(window[index - 1]["h"]),
+                    float(window[index + 1]["h"]),
+                    float(window[index + 2]["h"]),
+                ]
+            except (KeyError, TypeError, ValueError):
+                return None
+            if high > price and all(high > neighbor for neighbor in neighbors):
+                pivots.append(high)
+    if pivots:
+        return min(pivots)
+    year_high = high_52w(bars)
+    if year_high is not None and year_high > price:
+        return year_high
+    return None
+
+
 def distance_to_high_pct(price, high_value):
     """Negative percentage: how far below *high_value* the *price* is."""
     if price is None or high_value is None or high_value == 0:
@@ -150,6 +219,7 @@ def distance_to_high_pct(price, high_value):
 __all__ = [
     "calculate_ema", "calculate_adx", "calculate_macd",
     "high_52w", "recent_high", "daily_change_pct", "change_pct",
-    "distance_to_high_pct",
+    "distance_to_high_pct", "stochastic_k", "average_true_range",
+    "next_resistance",
 ]
 

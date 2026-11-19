@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
 """Pump-Ledger: Snapshot -> Outcome -> Feature-Statistik.
 
-Der Ablauf, den der User will:
-  1. snapshot : aus gespeicherten Reports Kandidaten + Merkmale + Entry-Preis
-                nach data/ledger/snapshots.jsonl schreiben (idempotent).
-  2. resolve  : pro noch offenem Snapshot die 1D-Kerzen holen (TwelveData),
-                Close am Report-Tag (day0) und naechsten Handelstag (day1)
-                bestimmen, Return rechnen, PUMP/FLAT/REINFALL klassifizieren,
-                nach data/ledger/outcomes.jsonl schreiben.
-  3. stats    : die Merkmale der Gewinner vs. Verlierer auszaehlen.
-
-Entry-Preis = 'price_1d' aus dem Report (Intraday-Snapshot ~10:30 ET).
-Zwei Returns werden gemessen, weil der Report mitten in der Session laeuft:
-  - ret_entry      : Entry-Preis -> Close day1   (realistischer Kaufhorizont)
-  - ret_close_day01: Close day0 -> Close day1    (reiner Pump am Folgetag)
-PUMP = ret_close_day01 >= 8% ODER ret_entry >= 10%.
+1. snapshot : jedes gesendete Signal nach data/ledger/snapshots.jsonl
+2. resolve  : Sitzung korrekt auswerten
+   AFTER_CLOSE: Schluss Meldetag -> Open und Close des nächsten Handelstags
+   BEFORE_OPEN: Schluss des Vortags -> Open und Close des Meldetags
+   Einstieg = Kurs der Schlusskontrolle. PUMP >= +10 %, PUMP5 >= +5 %, LOSS <= -5 %.
+3. stats    : Trefferquote je Label und Sitzung.
 """
 from __future__ import annotations
 
@@ -27,13 +19,13 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-REPORTS = ROOT / "data" / "reports"
-LEDGER = ROOT / "data" / "ledger"
+from earnings_monitor.paths import ledger_dir, reports_dir  # noqa: E402
+from earnings_monitor.signal_log import record_report  # noqa: E402
+
+REPORTS = reports_dir()
+LEDGER = ledger_dir()
 SNAPSHOTS = LEDGER / "snapshots.jsonl"
 OUTCOMES = LEDGER / "outcomes.jsonl"
-
-PUMP_THRESHOLD = 8.0   # % ab Close day0 -> day1
-ENTRY_THRESHOLD = 10.0  # % ab Report-Entry -> day1
 
 
 # ---------------------------------------------------------------- snapshot
@@ -58,57 +50,18 @@ def _features(c: dict) -> dict:
 
 
 def cmd_snapshot(args) -> int:
-    LEDGER.mkdir(parents=True, exist_ok=True)
-    existing = set()
-    if SNAPSHOTS.exists():
-        for line in SNAPSHOTS.read_text().splitlines():
-            if line.strip():
-                r = json.loads(line)
-                existing.add((r["report_date"], r["report_type"], r["symbol"]))
-
     files = sorted(REPORTS.glob("*.json"))
     if args.since:
         files = [f for f in files if f.name[:10] >= args.since]
     added = 0
-    with SNAPSHOTS.open("a", encoding="utf-8") as fh:
-        for path in files:
-            try:
-                rep = json.loads(path.read_text(encoding="utf-8"))
-            except Exception as e:
-                print(f"skip {path.name}: {e}", file=sys.stderr)
-                continue
-            rdate = rep.get("report_date")
-            rtype = rep.get("report_type")
-            # Vorab-These der LLM-Bewertung (falls vorhanden) laden
-            thesis_map = {}
-            tf = LEDGER / "theses" / f"{rdate}_{rtype}.json"
-            if tf.exists():
-                try:
-                    thesis_map = json.loads(tf.read_text(encoding="utf-8")).get("theses", {})
-                except Exception:
-                    thesis_map = {}
-            for c in rep.get("candidates", []):
-                sym = str(c.get("symbol", "")).split(":")[-1].strip()
-                if not sym:
-                    continue
-                key = (rdate, rtype, sym)
-                if key in existing:
-                    continue
-                score = c.get("score") or {}
-                rec = {
-                    "report_date": rdate,
-                    "report_type": rtype,
-                    "symbol": sym,
-                    "entry_price": (c.get("values") or {}).get("price_1d"),
-                    "label": score.get("label"),
-                    "score_pct": score.get("score_pct"),
-                    "thesis": thesis_map.get(sym),
-                    "features": _features(c),
-                }
-                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                existing.add(key)
-                added += 1
-    print(f"Snapshots neu: {added} (gesamt {len(existing)})")
+    for path in files:
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"skip {path.name}: {exc}", file=sys.stderr)
+            continue
+        added += record_report(report)
+    print(f"Snapshots neu: {added}")
     return 0
 
 
@@ -170,13 +123,13 @@ def cmd_resolve(args) -> int:
         for line in OUTCOMES.read_text().splitlines():
             if line.strip():
                 r = json.loads(line)
-                done.add((r["report_date"], r["symbol"]))
+                done.add((r["report_date"], r.get("report_type"), r["symbol"]))
 
     snaps = [json.loads(l) for l in SNAPSHOTS.read_text().splitlines() if l.strip()]
     # Nur offene, mit Entry-Preis. Pro Symbol gruppieren -> 1 Call/Symbol.
     by_sym: dict[str, list[dict]] = {}
     for s in snaps:
-        key = (s["report_date"], s["symbol"])
+        key = (s["report_date"], s.get("report_type"), s["symbol"])
         if key in done or not s.get("entry_price"):
             continue
         by_sym.setdefault(s["symbol"], []).append(s)
@@ -236,20 +189,21 @@ def cmd_resolve(args) -> int:
                 if i < len(syms) - 1:
                     time.sleep(8)
 
-            dates = sorted({c["datetime"][:10] for c in candles})
-            close_by_date = {c["datetime"][:10]: c["close"] for c in candles}
+            bars = [
+                {"date": c["datetime"][:10], "open": c.get("open"), "close": c.get("close")}
+                for c in candles
+            ]
+            from earnings_monitor.outcomes import session_returns
 
             for s in by_sym[sym]:
                 rdate = s["report_date"]
-                day0 = close_by_date.get(rdate)
-                later = [d for d in dates if d > rdate]
-                day1 = close_by_date.get(later[0]) if later else None
-                entry = s["entry_price"]
-
-                # day1 (= eigentlicher Pump-Tag/Close) fehlt noch, Report ist
-                # aber frisch -> NICHT festschreiben, beim naechsten Lauf erneut
-                # versuchen. Erst nach 7 Tagen als wirklich unaufloesbar werten.
-                if day1 is None:
+                measured = session_returns(
+                    report_type=s.get("report_type") or "AFTER_CLOSE",
+                    report_date=rdate,
+                    bars=bars,
+                    entry_price=s.get("entry_price"),
+                )
+                if measured.get("status") != "PASS":
                     try:
                         from datetime import date as _date, datetime as _dt
                         age = (_date.today() - _dt.strptime(rdate, "%Y-%m-%d").date()).days
@@ -257,35 +211,28 @@ def cmd_resolve(args) -> int:
                         age = 999
                     if age <= 7:
                         continue
-                    verdict = "UNRESOLVED"
-                else:
-                    ret_entry = ((day1 - entry) / entry * 100) if (day1 and entry) else None
-                    ret_d01 = ((day1 - day0) / day0 * 100) if (day0 and day1) else None
-                    if (ret_d01 is not None and ret_d01 >= PUMP_THRESHOLD) or \
-                       (ret_entry is not None and ret_entry >= ENTRY_THRESHOLD):
-                        verdict = "PUMP"
-                    elif (ret_d01 is not None and ret_d01 <= -5) or (ret_entry is not None and ret_entry <= -5):
-                        verdict = "REINFALL"
-                    else:
-                        verdict = "FLAT"
-                ret_entry = ((day1 - entry) / entry * 100) if (day1 and entry) else None
-                ret_d01 = ((day1 - day0) / day0 * 100) if (day0 and day1) else None
-
+                    measured = {**measured, "verdict": "UNRESOLVED"}
+                ret_close = measured.get("ret_session_close")
                 rec = {
                     **{k: s[k] for k in ("report_date", "report_type", "symbol",
-                                         "entry_price", "label", "score_pct")},
-                    "day0_close": day0,
-                    "day1_date": later[0] if later else None,
-                    "day1_close": day1,
-                    "ret_entry": round(ret_entry, 2) if ret_entry is not None else None,
-                    "ret_close_day01": round(ret_d01, 2) if ret_d01 is not None else None,
-                    "verdict": verdict,
-                    "features": s["features"],
+                                         "entry_price", "label", "score_pct") if k in s},
+                    "session_date": measured.get("session_date"),
+                    "exit_date": measured.get("exit_date"),
+                    "base_close": measured.get("base_close"),
+                    "ret_session_open": measured.get("ret_session_open"),
+                    "ret_session_close": ret_close,
+                    "ret_official_close": measured.get("ret_official_close"),
+                    # Alias: Schluss-Return ab dem Kurs der Schlusskontrolle.
+                    "ret_close_day01": ret_close,
+                    "ret_entry": ret_close,
+                    "verdict": measured.get("verdict") or "UNRESOLVED",
+                    "features": s.get("features"),
                 }
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 wrote += 1
                 if args.verbose:
-                    print(f"  {sym:6} {rdate}: {verdict:9} ret_entry={ret_entry} ret_01={ret_d01}")
+                    print(f"  {sym:6} {rdate}: {rec['verdict']:9} "
+                          f"close={ret_close} open={measured.get('ret_session_open')}")
             fh.flush()
     print(f"Outcomes neu: {wrote} (Symbole verarbeitet: {len(syms)})")
     return 0
@@ -311,7 +258,7 @@ def cmd_stats(args) -> int:
         print("Keine outcomes.")
         return 0
     allrecs = [json.loads(l) for l in OUTCOMES.read_text().splitlines() if l.strip()]
-    recs = [r for r in allrecs if r["verdict"] in ("PUMP", "FLAT", "REINFALL")]
+    recs = [r for r in allrecs if r["verdict"] in ("PUMP", "PUMP5", "FLAT", "LOSS", "REINFALL")]
     unres = len(allrecs) - len(recs)
     n = len(recs)
     if n == 0:
@@ -322,7 +269,9 @@ def cmd_stats(args) -> int:
           f"offen/UNRESOLVED: {unres} ==\n")
 
     def ret(r):
-        v = r.get("ret_close_day01")
+        v = r.get("ret_session_close")
+        if v is None:
+            v = r.get("ret_close_day01")
         return v if v is not None else (r.get("ret_entry") or 0)
 
     def stats_for(selector, min_n=1):
